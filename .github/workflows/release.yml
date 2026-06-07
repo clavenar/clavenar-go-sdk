@@ -1,0 +1,52 @@
+name: release
+
+# Push a tag matching v* (e.g. v1.0.0) to cut a release: tests run, then
+# goreleaser publishes a GitHub release with the source archive,
+# checksums, an SBOM, and a cosign-keyless signature. Go modules need no
+# registry upload — `go get` resolves the tag via the module proxy.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Check semantic import path
+        run: |
+          MAJOR="$(echo "${GITHUB_REF_NAME}" | sed -E 's/^v([0-9]+).*/\1/')"
+          if [ "$MAJOR" -ge 2 ]; then
+            grep -qE "^module .*/v$MAJOR$" go.mod || {
+              echo "::error::module path must end in /v$MAJOR for tag ${GITHUB_REF_NAME}"; exit 1; }
+          fi
+
+      - run: go test -race -count=1 ./...
+
+      - uses: anchore/sbom-action/download-syft@v0
+      - uses: sigstore/cosign-installer@v3
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Warm the module proxy
+        run: |
+          GOPROXY=proxy.golang.org go list -m \
+            github.com/clavenar/clavenar-go-sdk@${GITHUB_REF_NAME} || true

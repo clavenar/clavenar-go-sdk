@@ -1,0 +1,48 @@
+version: 2
+
+project_name: clavenar-go-sdk
+
+# This is a library, not a command — there are no binaries to build. The
+# release exists for the source archive, checksums, SBOM, and signature;
+# `go get` resolves the code from the VCS tag via the module proxy.
+builds:
+  - skip: true
+
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}_{{ .Version }}_source"
+
+checksum:
+  name_template: "checksums.txt"
+
+sboms:
+  - artifacts: source
+
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-signature"
+      - "${signature}"
+      - "--output-certificate"
+      - "${certificate}"
+      - "${artifact}"
+    artifacts: checksum
+    output: true
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: clavenar
+    name: clavenar-go-sdk
