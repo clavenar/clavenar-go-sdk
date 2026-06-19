@@ -84,6 +84,44 @@ translate, in enforce mode, into typed errors you match with
 | `*clavenar.TransportError` | clavenar unreachable or returned an unexpected response — `Status` (0 = network) |
 | `*clavenar.ConfigError` | bad options, or a model tool call with unparseable arguments |
 
+## Debugging a denied call
+
+`*clavenar.Denied` carries `Reasons`, `Layer`, and `CorrelationID`. To see
+*which detector* fired, run the gateway with
+`CLAVENAR_PROXY_VERBOSE_VERDICTS=true` (Lite: `--verbose-verdicts`) — the
+deny then carries a per-detector `Detail` breakdown, exposed as
+`denied.Detail` and rendered to stderr when you set `DevMode: true`:
+
+```go
+client := clavenar.Wrap(anthropic, clavenar.Options{
+    Endpoint: "https://clavenar.internal",
+    DevMode:  true, // dev/staging only — detailed denials are an attacker oracle
+})
+// On a deny, the SDK prints a panel to stderr:
+//   ━━ clavenar denied: send_email ━━
+//     layer=brain  intent=Exfiltration  correlation=abc-123
+//     detectors:
+//       persona_drift         0.12
+//       injection             0.91  ⚠ flagged
+//     degraded: injection
+```
+
+Programmatic access (no `DevMode` needed):
+
+```go
+var denied *clavenar.Denied
+if errors.As(err, &denied) && denied.Detail != nil {
+    for _, d := range denied.Detail.Detectors {
+        if d.Flagged || d.Score >= 0.5 {
+            log.Printf("fired: %s (%.2f)", d.Detector, d.Score)
+        }
+    }
+}
+```
+
+`Detail` is nil unless the gateway opts in; without it the panel prints a
+hint. `clavenar.RenderDenyPanel(denied)` returns the string directly.
+
 ## Enforce vs observe
 
 The default is enforce: deny and pending block. Observe never blocks —

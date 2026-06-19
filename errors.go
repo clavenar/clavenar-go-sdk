@@ -36,6 +36,9 @@ type Denied struct {
 	// CorrelationID is clavenar's join key for the audit ledger, when
 	// the server sets the correlation header.
 	CorrelationID string
+	// Detail is the verbose-verdict per-detector breakdown, present only
+	// when the gateway runs with CLAVENAR_PROXY_VERBOSE_VERDICTS=true.
+	Detail *VerdictDetail
 }
 
 func (e *Denied) Error() string {
@@ -149,6 +152,7 @@ func newDenied(call ToolCall, v Verdict) *Denied {
 		IntentCategory: v.IntentCategory,
 		Layer:          v.Layer,
 		CorrelationID:  v.CorrelationID,
+		Detail:         v.Detail,
 	}
 }
 

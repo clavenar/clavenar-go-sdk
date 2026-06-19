@@ -52,6 +52,28 @@ type Verdict struct {
 	ReviewReasons  []string
 	IntentCategory string
 	Layer          string
+	// Detail is the verbose-verdict per-detector breakdown, present only
+	// when the gateway runs with CLAVENAR_PROXY_VERBOSE_VERDICTS=true.
+	Detail *VerdictDetail
+}
+
+// DetectorScore is one detector's contribution to a verbose-verdict deny.
+// Score is the numeric signal in [0,1]; Flagged is the boolean verdict on
+// the boolean lanes (injection / malicious_code / compromised_package) and
+// false on the numeric lanes (persona_drift / sequence_escalation), where
+// Score is the value to read.
+type DetectorScore struct {
+	Detector string
+	Score    float64
+	Flagged  bool
+}
+
+// VerdictDetail is the verbose-verdict breakdown attached to a deny when
+// the gateway opts in.
+type VerdictDetail struct {
+	Detectors []DetectorScore
+	// Degraded lists detector lanes that served a fallback verdict.
+	Degraded []string
 }
 
 // VerdictContext identifies the tool call an OnVerdict / OnPolicyError

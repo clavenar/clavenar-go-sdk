@@ -171,7 +171,41 @@ func parseDeny(resp *http.Response, corr string) (Verdict, error) {
 	if layer, ok := m["layer"].(string); ok {
 		v.Layer = layer
 	}
+	v.Detail = parseVerdictDetail(m["detail"])
 	return v, nil
+}
+
+// parseVerdictDetail extracts the optional verbose-verdict breakdown.
+// Lenient: a missing or malformed block yields nil (the gateway omits it
+// unless CLAVENAR_PROXY_VERBOSE_VERDICTS=true).
+func parseVerdictDetail(raw any) *VerdictDetail {
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	rawDetectors, ok := obj["detectors"].([]any)
+	if !ok {
+		return nil
+	}
+	d := &VerdictDetail{}
+	for _, item := range rawDetectors {
+		dm, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, ok := dm["detector"].(string)
+		if !ok {
+			continue
+		}
+		score, ok := dm["score"].(float64) // encoding/json numbers decode to float64
+		if !ok {
+			continue
+		}
+		flagged, _ := dm["flagged"].(bool)
+		d.Detectors = append(d.Detectors, DetectorScore{Detector: name, Score: score, Flagged: flagged})
+	}
+	d.Degraded = stringSlice(obj["degraded"])
+	return d
 }
 
 func parsePending(resp *http.Response, corr string) (Verdict, error) {

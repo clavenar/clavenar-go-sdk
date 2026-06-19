@@ -49,6 +49,13 @@ type Options struct {
 	// OnPolicyError fires (observe mode only) when an inspection fails
 	// at the transport layer; the call is then treated as allowed.
 	OnPolicyError func(*TransportError, VerdictContext) error
+	// DevMode renders the gateway's verbose-verdict detail (per-detector
+	// scores, degraded lanes, reasons, correlation id) to stderr on a
+	// denied call before returning the error. Off by default. The detail
+	// is present only when the gateway runs with
+	// CLAVENAR_PROXY_VERBOSE_VERDICTS=true; otherwise a hint is printed.
+	// Dev/staging only — detailed denials are an attacker oracle.
+	DevMode bool
 }
 
 const (

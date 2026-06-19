@@ -73,7 +73,11 @@ func InspectAll(ctx context.Context, calls []ToolCall, opts Options) error {
 		}
 		switch r.v.Kind {
 		case VerdictDeny:
-			return newDenied(calls[i], r.v)
+			denied := newDenied(calls[i], r.v)
+			if o.DevMode {
+				emitDenyPanel(denied)
+			}
+			return denied
 		case VerdictPending:
 			return newPending(calls[i], r.v, o)
 		}
