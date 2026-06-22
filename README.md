@@ -93,7 +93,7 @@ deny then carries a per-detector `Detail` breakdown, exposed as
 `denied.Detail` and rendered to stderr when you set `DevMode: true`:
 
 ```go
-client := clavenar.Wrap(anthropic, clavenar.Options{
+messages := clavenaranthropic.WrapMessages(&base, clavenar.Options{
     Endpoint: "https://clavenar.internal",
     DevMode:  true, // dev/staging only — detailed denials are an attacker oracle
 })
