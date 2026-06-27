@@ -3,7 +3,10 @@
 The Go SDK reproduces the TypeScript reference
 ([`@clavenar/agent-sdk`](https://github.com/clavenar/clavenar-typescript-sdk))
 byte-for-byte on the wire. The behaviors below are identical across the
-TS, Python, and Go SDKs:
+TS, Python, and Go SDKs — with one validation-strictness caveat noted in
+the differences list below: on `GET /pending/{id}` the Go and Python SDKs
+validate the response body leniently while TS strictly validates the full
+`PendingView` shape, so TS is the strict outlier there.
 
 | Behavior | Contract |
 |---|---|
@@ -45,3 +48,12 @@ None change wire bytes or verdict outcomes:
    order).
 5. **No `extraHeaders` option** — matches the TS reference (the Python
    SDK has one; the Go SDK follows TS).
+6. **Lenient `GET /pending/{id}` body validation.** `parsePendingView`
+   validates only the `decision` field (`null` / `"allow"` / `"deny"`)
+   and unmarshals the rest of the `PendingView` verbatim — matching the
+   Python SDK's `_parse_pending_view`. The TS reference's `isPendingView`
+   is the strict outlier: it asserts the full body shape
+   (`correlation_id`, `agent_id`, `tool_type`, `method`, `review_reasons`,
+   `requested_at`, `decided_at`, `decider_note`) and throws on any
+   mismatch. The two diverge only on a non-conformant body; a conformant
+   gateway yields the same verdict everywhere.
