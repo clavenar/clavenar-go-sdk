@@ -1,5 +1,5 @@
 <!-- public repo — do not add internal topology, secrets, deploy/runbook, strategy, or absolute host paths -->
-# clavenar-go-sdk — agent-side wrapper SDK (Go): explicit `Inspect`/`InspectAll` + opt-in provider adapters
+# clavenar-go-sdk — agent-side wrapper SDK: explicit `Inspect`/`InspectAll` + opt-in provider adapters
 
 Inspects the tool calls a model emits against your Clavenar policies
 *before* your agent runs them. Zero-dep core (stdlib + `golang.org/x/sync`
@@ -37,8 +37,8 @@ Run: library, no binary. The SDK is an HTTP client of a Clavenar gateway
 
 Import path ends `clavenar-go-sdk`; package name is `clavenar`.
 
-- `inspect.go` — `Inspect` (single) / `InspectAll` (batch, concurrent via `errgroup`).
-- `transport.go` — JSON-RPC envelope, `POST /mcp`, status→verdict mapping, jittered retry.
+- `inspect.go` — `InspectAll` (batch, concurrent via `errgroup`).
+- `transport.go` — `Inspect` (single), JSON-RPC envelope, `POST /mcp`, status→verdict mapping, jittered retry.
 - `toolcall.go` — `ToolCall` normalization (the provider-agnostic unit of inspection).
 - `options.go` — `Options`, `New(endpoint, ...Option)`, `WithToken` / `WithObserve` / `WithOnVerdict` / `WithOnPolicyError` / `WithRetry` / `WithTimeout`.
 - `errors.go` — typed errors `*Denied` / `*Pending` / `*TransportError` / `*ConfigError`; `Pending.Resolve` polls `/pending/{id}`.
