@@ -157,6 +157,71 @@ func TestInspectPendingBothEmpty(t *testing.T) {
 	}
 }
 
+func TestInspectRateLimited(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&n, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"verdict":"rate_limited","layer":"proxy","error":"rate_limited","reasons":["agent request velocity exceeded"],"correlation_id":"c-429","retry_after_secs":17}`))
+	}))
+	defer srv.Close()
+
+	v, err := Inspect(context.Background(), sampleCall(),
+		mustOpts(srv.URL, WithRetry(Retry{MaxAttempts: 3, BaseDelay: time.Millisecond})))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v.Kind != VerdictRateLimited || v.RateLimitCode != "rate_limited" {
+		t.Fatalf("verdict = %+v", v)
+	}
+	if v.RetryAfterSecs == nil || *v.RetryAfterSecs != 17 {
+		t.Fatalf("retry_after_secs = %v", v.RetryAfterSecs)
+	}
+	if v.Layer != "proxy" || v.CorrelationID != "c-429" {
+		t.Fatalf("verdict = %+v", v)
+	}
+	if len(v.Reasons) != 1 || v.Reasons[0] != "agent request velocity exceeded" {
+		t.Fatalf("reasons = %v", v.Reasons)
+	}
+	// A 429 is a verdict, not a transient failure — exactly one attempt.
+	if got := atomic.LoadInt32(&n); got != 1 {
+		t.Fatalf("attempts = %d, want 1 (429 must not retry)", got)
+	}
+}
+
+func TestInspectRateLimitedQuotaExceeded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"verdict":"quota_exceeded","layer":"proxy","error":"quota_exceeded","reasons":["tenant monthly spend cap reached"]}`))
+	}))
+	defer srv.Close()
+
+	v, err := Inspect(context.Background(), sampleCall(), mustOpts(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v.Kind != VerdictRateLimited || v.RateLimitCode != "quota_exceeded" {
+		t.Fatalf("verdict = %+v", v)
+	}
+	if v.RetryAfterSecs != nil {
+		t.Fatalf("retry_after_secs should be nil, got %d", *v.RetryAfterSecs)
+	}
+}
+
+func TestInspectRateLimitedBadShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"wrong":"shape"}`))
+	}))
+	defer srv.Close()
+
+	_, err := Inspect(context.Background(), sampleCall(), mustOpts(srv.URL))
+	var te *TransportError
+	if !errors.As(err, &te) || te.Status != http.StatusTooManyRequests {
+		t.Fatalf("want TransportError(429), got %v", err)
+	}
+}
+
 func TestInspectUnexpectedStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

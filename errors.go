@@ -144,6 +144,36 @@ func (e *Pending) Resolve(ctx context.Context, opts *ResolveOptions) error {
 	return &TransportError{Msg: fmt.Sprintf("clavenar pending %s not decided within %s", e.CorrelationID, timeout)}
 }
 
+// RateLimited is returned (enforce mode) when clavenar answers 429 — the
+// call was rejected before evaluation, by the request-velocity gate
+// ("rate_limited") or the per-tenant spend gate ("quota_exceeded"). The
+// transport never retries a 429: honor RetryAfterSecs (set on
+// "rate_limited" only) or fail the operation.
+type RateLimited struct {
+	ToolName string
+	// Code is "rate_limited" (velocity gate) or "quota_exceeded" (spend
+	// gate).
+	Code    string
+	Reasons []string
+	// RetryAfterSecs is seconds to wait before retrying; nil on
+	// "quota_exceeded".
+	RetryAfterSecs *int
+	// Layer names the stage that produced the verdict, when the server
+	// reports it.
+	Layer string
+	// CorrelationID is clavenar's join key for the audit ledger, when
+	// the server reports it.
+	CorrelationID string
+}
+
+func (e *RateLimited) Error() string {
+	msg := fmt.Sprintf("clavenar %s for tool %q", e.Code, e.ToolName)
+	if e.RetryAfterSecs != nil {
+		msg += fmt.Sprintf(" (retry after %ds)", *e.RetryAfterSecs)
+	}
+	return msg
+}
+
 func newDenied(call ToolCall, v Verdict) *Denied {
 	return &Denied{
 		ToolName:       call.Name,
@@ -164,5 +194,16 @@ func newPending(call ToolCall, v Verdict, opts Options) *Pending {
 		pollOnce: func(ctx context.Context) (PendingView, error) {
 			return PollPendingOnce(ctx, v.CorrelationID, opts)
 		},
+	}
+}
+
+func newRateLimited(call ToolCall, v Verdict) *RateLimited {
+	return &RateLimited{
+		ToolName:       call.Name,
+		Code:           v.RateLimitCode,
+		Reasons:        v.Reasons,
+		RetryAfterSecs: v.RetryAfterSecs,
+		Layer:          v.Layer,
+		CorrelationID:  v.CorrelationID,
 	}
 }

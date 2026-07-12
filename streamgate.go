@@ -14,9 +14,9 @@ import (
 // id/name/args together), then Close — called BEFORE the adapter
 // forwards the closing event — to inspect.
 //
-// Close returns the same *Denied / *Pending / *TransportError /
-// *ConfigError an InspectAll would, so the adapter can stop the stream
-// before releasing the closing event on a deny. Keys identify a tool
+// Close returns the same *Denied / *Pending / *RateLimited /
+// *TransportError / *ConfigError an InspectAll would, so the adapter can
+// stop the stream before releasing the closing event on a deny. Keys identify a tool
 // call within the stream: the Anthropic content-block index, or
 // "choiceIndex:toolIndex" for OpenAI.
 //

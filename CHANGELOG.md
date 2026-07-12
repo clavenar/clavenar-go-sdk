@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/), and the project
 adheres to [Semantic Import Versioning](https://go.dev/ref/mod#versions).
 
+## [Unreleased]
+
+### Added
+
+- 429 rate-limit verdicts (spec §"Agent-facing error envelope"):
+  `Inspect` parses the 429 envelope into `VerdictRateLimited` —
+  `RateLimitCode` (`rate_limited` / `quota_exceeded`), `Reasons`,
+  optional `RetryAfterSecs` — and never retries it. In enforce mode
+  `InspectAll`, `StreamGate`, and the adapters return the new
+  `*RateLimited` error; observe mode surfaces the verdict via
+  `OnVerdict` and passes the call through.
+
 ## [1.0.0]
 
 Initial release. Go port of the Clavenar agent-wrapper SDK, behavior-

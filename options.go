@@ -21,7 +21,7 @@ const (
 
 // Retry is the per-inspection retry policy. Network errors and 5xx
 // responses retry up to MaxAttempts with full-jitter exponential backoff
-// (BaseDelay*2^attempt); 200 / 403 / other-4xx never retry.
+// (BaseDelay*2^attempt); 200 / 403 / 429 / other-4xx never retry.
 type Retry struct {
 	MaxAttempts int
 	BaseDelay   time.Duration

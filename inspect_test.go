@@ -146,6 +146,72 @@ func TestInspectAllPendingEnforce(t *testing.T) {
 	}
 }
 
+func TestInspectAllRateLimitedEnforce(t *testing.T) {
+	srv := nameRouter(t, func(string) (int, string, string) {
+		return http.StatusTooManyRequests, "c-429",
+			`{"verdict":"rate_limited","layer":"proxy","error":"rate_limited","reasons":["agent request velocity exceeded"],"retry_after_secs":30}`
+	})
+	defer srv.Close()
+
+	err := InspectAll(context.Background(), []ToolCall{sampleCall()}, mustOpts(srv.URL))
+	var rl *RateLimited
+	if !errors.As(err, &rl) {
+		t.Fatalf("want *RateLimited, got %v", err)
+	}
+	if rl.ToolName != "delete_user" || rl.Code != "rate_limited" || rl.Layer != "proxy" || rl.CorrelationID != "c-429" {
+		t.Fatalf("rate limited = %+v", rl)
+	}
+	if rl.RetryAfterSecs == nil || *rl.RetryAfterSecs != 30 {
+		t.Fatalf("retry_after_secs = %v", rl.RetryAfterSecs)
+	}
+	if len(rl.Reasons) != 1 || rl.Reasons[0] != "agent request velocity exceeded" {
+		t.Fatalf("reasons = %v", rl.Reasons)
+	}
+	if got, want := rl.Error(), `clavenar rate_limited for tool "delete_user" (retry after 30s)`; got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestInspectAllQuotaExceededEnforce(t *testing.T) {
+	srv := nameRouter(t, func(string) (int, string, string) {
+		return http.StatusTooManyRequests, "",
+			`{"verdict":"quota_exceeded","error":"quota_exceeded","reasons":["tenant monthly spend cap reached"]}`
+	})
+	defer srv.Close()
+
+	err := InspectAll(context.Background(), []ToolCall{sampleCall()}, mustOpts(srv.URL))
+	var rl *RateLimited
+	if !errors.As(err, &rl) {
+		t.Fatalf("want *RateLimited, got %v", err)
+	}
+	if rl.Code != "quota_exceeded" || rl.RetryAfterSecs != nil {
+		t.Fatalf("rate limited = %+v", rl)
+	}
+	if got, want := rl.Error(), `clavenar quota_exceeded for tool "delete_user"`; got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestInspectAllRateLimitedObserve(t *testing.T) {
+	srv := nameRouter(t, func(string) (int, string, string) {
+		return http.StatusTooManyRequests, "",
+			`{"verdict":"rate_limited","error":"rate_limited","reasons":["agent request velocity exceeded"],"retry_after_secs":30}`
+	})
+	defer srv.Close()
+
+	var kinds []VerdictKind
+	opts := mustOpts(srv.URL, WithObserve(), WithOnVerdict(func(v Verdict, _ VerdictContext) error {
+		kinds = append(kinds, v.Kind)
+		return nil
+	}))
+	if err := InspectAll(context.Background(), []ToolCall{sampleCall()}, opts); err != nil {
+		t.Fatalf("observe mode must not return error on rate limit, got %v", err)
+	}
+	if len(kinds) != 1 || kinds[0] != VerdictRateLimited {
+		t.Fatalf("OnVerdict kinds = %v", kinds)
+	}
+}
+
 func TestInspectAllOnVerdictAbort(t *testing.T) {
 	srv := nameRouter(t, func(string) (int, string, string) {
 		return http.StatusOK, "", ""

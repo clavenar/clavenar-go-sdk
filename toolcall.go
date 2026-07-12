@@ -21,6 +21,10 @@ const (
 	VerdictDeny
 	// VerdictPending: the call was parked for human review.
 	VerdictPending
+	// VerdictRateLimited: the call was rejected before evaluation by the
+	// request-velocity gate ("rate_limited") or the per-tenant spend gate
+	// ("quota_exceeded").
+	VerdictRateLimited
 )
 
 func (k VerdictKind) String() string {
@@ -31,14 +35,16 @@ func (k VerdictKind) String() string {
 		return "deny"
 	case VerdictPending:
 		return "pending"
+	case VerdictRateLimited:
+		return "rate_limited"
 	default:
 		return "unknown"
 	}
 }
 
 // Verdict is the result of inspecting one tool call. Inspect returns it
-// directly; InspectAll turns Deny / Pending into *Denied / *Pending in
-// enforce mode.
+// directly; InspectAll turns Deny / Pending / RateLimited into *Denied /
+// *Pending / *RateLimited in enforce mode.
 type Verdict struct {
 	Kind VerdictKind
 	// CorrelationID is the x-clavenar-correlation-id response header,
@@ -47,11 +53,17 @@ type Verdict struct {
 	CorrelationID string
 	// Reasons, ReviewReasons, IntentCategory and Layer are populated on
 	// Deny (Layer only when the server reports it). ReviewReasons is
-	// also set on Pending.
+	// also set on Pending; Reasons and Layer also on RateLimited.
 	Reasons        []string
 	ReviewReasons  []string
 	IntentCategory string
 	Layer          string
+	// RateLimitCode is "rate_limited" (request-velocity gate) or
+	// "quota_exceeded" (per-tenant spend gate), set on RateLimited.
+	RateLimitCode string
+	// RetryAfterSecs is seconds to wait before retrying, when the server
+	// reports it on RateLimited; nil on "quota_exceeded".
+	RetryAfterSecs *int
 	// Detail is the verbose-verdict per-detector breakdown, present only
 	// when the gateway runs with CLAVENAR_PROXY_VERBOSE_VERDICTS=true.
 	Detail *VerdictDetail

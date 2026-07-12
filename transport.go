@@ -102,6 +102,8 @@ func inspectOnce(ctx context.Context, call ToolCall, o Options) (Verdict, error)
 		return parseDeny(resp, corr)
 	case http.StatusAccepted:
 		return parsePending(resp, corr)
+	case http.StatusTooManyRequests:
+		return parseRateLimit(resp, corr)
 	default:
 		text := safeReadText(resp)
 		msg := fmt.Sprintf("clavenar inspect: unexpected status %d", resp.StatusCode)
@@ -230,6 +232,41 @@ func parsePending(resp *http.Response, corr string) (Verdict, error) {
 	return Verdict{Kind: VerdictPending, CorrelationID: id, ReviewReasons: stringSlice(m["review_reasons"])}, nil
 }
 
+// parseRateLimit parses the 429 envelope. Lenient like the deny parser:
+// only the string error code is required; the verdict falls back to
+// "rate_limited" when the body omits it (both codes ride HTTP 429).
+func parseRateLimit(resp *http.Response, corr string) (Verdict, error) {
+	m, err := decodeObject(resp)
+	if err != nil {
+		return Verdict{}, &TransportError{Msg: "clavenar 429 with unparseable body: " + err.Error(), Status: http.StatusTooManyRequests}
+	}
+	if _, ok := m["error"].(string); !ok {
+		return Verdict{}, &TransportError{Msg: fmt.Sprintf("clavenar 429 with unexpected body shape: %v", m), Status: http.StatusTooManyRequests}
+	}
+	code := "rate_limited"
+	if m["verdict"] == "quota_exceeded" {
+		code = "quota_exceeded"
+	}
+	id := corr
+	if id == "" {
+		id = stringOr(m["correlation_id"], "")
+	}
+	v := Verdict{
+		Kind:          VerdictRateLimited,
+		CorrelationID: id,
+		Reasons:       stringSlice(m["reasons"]),
+		RateLimitCode: code,
+	}
+	if layer, ok := m["layer"].(string); ok {
+		v.Layer = layer
+	}
+	if secs, ok := m["retry_after_secs"].(float64); ok {
+		s := int(secs)
+		v.RetryAfterSecs = &s
+	}
+	return v, nil
+}
+
 func parsePendingView(resp *http.Response) (PendingView, error) {
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -263,8 +300,8 @@ func decodeObject(resp *http.Response) (map[string]any, error) {
 func isRetriable(te *TransportError) bool {
 	// Status 0 means the request never got an HTTP response (DNS,
 	// connection refused, timeout) — retriable. 5xx is a server error,
-	// also retriable. Everything else (401, 404, 400, and the 403 / 202
-	// verdict statuses) is terminal.
+	// also retriable. Everything else (401, 404, 400, and the 403 / 202 /
+	// 429 verdict statuses) is terminal.
 	if te.Status == 0 {
 		return true
 	}

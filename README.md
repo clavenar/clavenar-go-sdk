@@ -73,14 +73,15 @@ OpenAI is the same shape:
 ## Verdicts and the error model
 
 `clavenar.Inspect` returns a `Verdict` whose `Kind` is `VerdictAllow`,
-`VerdictDeny`, or `VerdictPending`. `InspectAll` and the adapter facades
-translate, in enforce mode, into typed errors you match with
-`errors.As`:
+`VerdictDeny`, `VerdictPending`, or `VerdictRateLimited`. `InspectAll`
+and the adapter facades translate, in enforce mode, into typed errors
+you match with `errors.As`:
 
 | Error | Meaning |
 |---|---|
 | `*clavenar.Denied` | policy rejected the call — `ToolName`, `Reasons`, `ReviewReasons`, `IntentCategory`, `Layer`, `CorrelationID` |
 | `*clavenar.Pending` | parked for human review — call `Resolve(ctx, nil)` to block until an operator decides |
+| `*clavenar.RateLimited` | rejected before evaluation by the velocity or spend gate — `Code` (`rate_limited` / `quota_exceeded`), `Reasons`, `RetryAfterSecs` (nil on `quota_exceeded`), `Layer`, `CorrelationID`; never retried by the transport |
 | `*clavenar.TransportError` | clavenar unreachable or returned an unexpected response — `Status` (0 = network) |
 | `*clavenar.ConfigError` | bad options, or a model tool call with unparseable arguments |
 

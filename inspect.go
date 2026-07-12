@@ -8,9 +8,9 @@ import (
 )
 
 // InspectAll inspects every tool call concurrently and, in enforce mode,
-// returns the first *Denied / *Pending in submission order — the first
-// deny in calls[], not the first to come back over the wire. OnVerdict
-// fires per call before any deny->error translation.
+// returns the first *Denied / *Pending / *RateLimited in submission
+// order — the first deny in calls[], not the first to come back over the
+// wire. OnVerdict fires per call before any deny->error translation.
 //
 // In observe mode nothing blocks: deny passes through, and a per-call
 // transport failure fires OnPolicyError and is treated as allowed so one
@@ -80,6 +80,8 @@ func InspectAll(ctx context.Context, calls []ToolCall, opts Options) error {
 			return denied
 		case VerdictPending:
 			return newPending(calls[i], r.v, o)
+		case VerdictRateLimited:
+			return newRateLimited(calls[i], r.v)
 		}
 	}
 	return nil

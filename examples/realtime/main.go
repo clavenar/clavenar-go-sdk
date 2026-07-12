@@ -32,6 +32,9 @@ func main() {
 		log.Printf("deny %s: %v", evt.Name, v.Reasons)
 	case clavenar.VerdictPending:
 		log.Printf("pending %s (correlation %s)", evt.Name, v.CorrelationID)
+	case clavenar.VerdictRateLimited:
+		// Back off (v.RetryAfterSecs when set) before re-sending the call.
+		log.Printf("rate limited %s: %v", evt.Name, v.Reasons)
 	default:
 		log.Printf("allow — dispatch %s", evt.Name)
 	}
