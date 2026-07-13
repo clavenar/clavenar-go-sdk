@@ -67,6 +67,7 @@ Go standards that bind here:
 - `govulncheck ./...` clean on every module.
 - Tests are `*_test.go` beside the code; run with `-race -count=1`.
 - Doc comments are prose (package doc in `doc.go`); keep exported types behavior-compatible with the TS/Python SDKs — see `docs/PARITY.md` before changing wire behavior.
+- Commit subjects must start with a lowercase letter.
 
 ## Pointers
 
