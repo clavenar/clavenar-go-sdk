@@ -53,6 +53,7 @@ Import path ends `clavenar-go-sdk`; package name is `clavenar`.
 
 ## Conventions & invariants
 
+- After adding or updating a feature, also update the relevant `MANUAL_TESTS*` file(s) when needed.
 - **Inspect before dispatch — always.** The SDK exists so no model-emitted tool call runs un-inspected. Build `ToolCall` values and clear them through `Inspect`/`InspectAll` (or an adapter) ahead of execution; never run a call you haven't gated.
 - **Zero-dep core.** The root module depends only on the stdlib + `golang.org/x/sync`. Provider SDKs belong in `adapters/*` only — never add an `anthropic`/`openai` import to the core module.
 - **Fail closed.** In enforce mode an unreachable gateway returns `*TransportError`, never a silent allow. Observe mode never blocks: per-call transport errors fire `OnPolicyError` and the call passes.
