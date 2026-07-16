@@ -18,12 +18,12 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: 'stable'
+          go-version: '1.24.13'
           cache: true
 
       - name: Check semantic import path
@@ -36,12 +36,16 @@ jobs:
 
       - run: go test -race -count=1 ./...
 
-      - uses: anchore/sbom-action/download-syft@v0
-      - uses: sigstore/cosign-installer@v3
-
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
-          version: '~> v2'
+          syft-version: v1.46.0
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: v2.5.2
+
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          version: 'v2.17.0'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
