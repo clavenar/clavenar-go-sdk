@@ -266,13 +266,15 @@ func TestInspectTimeout(t *testing.T) {
 }
 
 func TestInspectRequestEnvelope(t *testing.T) {
-	var gotMethod, gotPath, gotCT, gotAuth string
+	var gotMethod, gotPath, gotCT, gotAuth, gotDecision, gotID string
 	var gotBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		gotCT = r.Header.Get("Content-Type")
 		gotAuth = r.Header.Get("Authorization")
+		gotDecision = r.Header.Get(decisionContractHeader)
+		gotID = r.Header.Get(idempotencyIDHeader)
 		gotBody, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -288,6 +290,9 @@ func TestInspectRequestEnvelope(t *testing.T) {
 	if gotCT != "application/json" || gotAuth != "Bearer tok" {
 		t.Fatalf("headers ct=%q auth=%q", gotCT, gotAuth)
 	}
+	if gotDecision != decisionContract || gotID == "" {
+		t.Fatalf("decision headers contract=%q id=%q", gotDecision, gotID)
+	}
 	var env struct {
 		JSONRPC string `json:"jsonrpc"`
 		Method  string `json:"method"`
@@ -300,8 +305,11 @@ func TestInspectRequestEnvelope(t *testing.T) {
 	if err := json.Unmarshal(gotBody, &env); err != nil {
 		t.Fatalf("body not json: %v (%s)", err, gotBody)
 	}
-	if env.JSONRPC != "2.0" || env.Method != "tools/call" || env.ID != "toolu_1" || env.Params.Name != "delete_user" {
+	if env.JSONRPC != "2.0" || env.Method != "tools/call" || !validUUID(env.ID) || env.Params.Name != "delete_user" {
 		t.Fatalf("envelope = %+v", env)
+	}
+	if env.ID != gotID {
+		t.Fatalf("envelope id %q != header id %q", env.ID, gotID)
 	}
 	if string(env.Params.Arguments) != `{"user":"alice"}` {
 		t.Fatalf("arguments not passed through verbatim: %s", env.Params.Arguments)

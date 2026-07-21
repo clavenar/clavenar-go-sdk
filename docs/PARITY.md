@@ -17,7 +17,7 @@ validate the response body leniently while TS strictly validates the full
 | 202 | pending; `correlationId = header ?? body`, both empty → transport error |
 | 429 | rate-limit verdict — never retried; non-string `error` → transport error; `verdict` is `quota_exceeded` only when exactly that, else `rate_limited`; missing `reasons` → empty; `retry_after_secs` optional; `correlationId = header ?? body` |
 | Retry | network + 5xx retry up to `MaxAttempts` (default 3); full-jitter backoff `base*2^attempt*(0.5+rand*0.5)`, base 100ms; 200/403/429/other-4xx never retry; timeout 10s |
-| Inspect-all | concurrent inspect, **submission-order** first-deny; `OnVerdict` before any deny→error |
+| Inspect-all | one ordered atomic decision, **submission-order** first-deny; `OnVerdict` before any deny→error |
 | Enforce | first deny → `Denied`, pending → `Pending`, rate-limit → `RateLimited`; transport error fails closed, `OnPolicyError` not called |
 | Observe | nothing blocks; per-call transport failure → `OnPolicyError`, treated as allowed |
 | Streaming | closing event held until verdict; empty args → `{}`; unparseable drained args → `ConfigError` |

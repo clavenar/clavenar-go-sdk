@@ -6,6 +6,21 @@ adheres to [Semantic Import Versioning](https://go.dev/ref/mod#versions).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-21
+
+### Added
+
+- Governed execution with serializable prepared requests, a registered
+  executor, durable intent/completion store, workload receipt signer, and
+  actual provider-result return.
+- The shared `clavenar.sdk-cross-language/v1` conformance fixture.
+
+### Changed
+
+- `Inspect` explicitly selects `clavenar.decision/v1` with a UUID allocated
+  before the first attempt and retained across safe retries. `InspectAll`
+  submits multi-tool turns through one ordered atomic-batch decision.
+
 ### Added
 
 - 429 rate-limit verdicts (spec §"Agent-facing error envelope"):

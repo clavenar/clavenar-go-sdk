@@ -3,6 +3,7 @@ package clavenar
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,12 @@ import (
 )
 
 const correlationHeader = "X-Clavenar-Correlation-Id"
+
+const (
+	decisionContract       = "clavenar.decision/v1"
+	decisionContractHeader = "X-Clavenar-Decision-Contract"
+	idempotencyIDHeader    = "X-Clavenar-Idempotency-Id"
+)
 
 type inspectRequest struct {
 	JSONRPC string        `json:"jsonrpc"`
@@ -42,9 +49,92 @@ func Inspect(ctx context.Context, call ToolCall, opts Options) (Verdict, error) 
 		return Verdict{}, &TransportError{Msg: fmt.Sprintf("clavenar: Retry.MaxAttempts must be >= 1, got %d", o.Retry.MaxAttempts)}
 	}
 
+	idempotencyID, err := newUUID()
+	if err != nil {
+		return Verdict{}, &TransportError{Msg: "clavenar: failed to allocate decision identity: " + err.Error()}
+	}
+	body, err := json.Marshal(inspectRequest{
+		JSONRPC: "2.0",
+		Method:  "tools/call",
+		Params:  inspectParams{Name: call.Name, Arguments: call.Input},
+		ID:      idempotencyID,
+	})
+	if err != nil {
+		return Verdict{}, &TransportError{Msg: "clavenar inspect: failed to encode request: " + err.Error()}
+	}
+	return inspectDecision(ctx, body, idempotencyID, o)
+}
+
+// InspectBatch submits one ordered decision for a complete model tool-call
+// sibling set. Proxy executes no upstream effect in this selected mode.
+func InspectBatch(ctx context.Context, calls []ToolCall, opts Options) (Verdict, error) {
+	if err := opts.validate(); err != nil {
+		return Verdict{}, err
+	}
+	if len(calls) < 1 || len(calls) > 128 {
+		return Verdict{}, &ConfigError{Msg: "clavenar: atomic decision batch must contain 1..128 calls"}
+	}
+	seen := make(map[string]struct{}, len(calls))
+	batchCalls := make([]atomicBatchCall, 0, len(calls))
+	for _, call := range calls {
+		if call.ID == "" || call.Name == "" {
+			return Verdict{}, &ConfigError{Msg: "clavenar: atomic decision calls require non-empty id and name"}
+		}
+		if _, exists := seen[call.ID]; exists {
+			return Verdict{}, &ConfigError{Msg: "clavenar: atomic decision calls require unique ids"}
+		}
+		seen[call.ID] = struct{}{}
+		batchCalls = append(batchCalls, atomicBatchCall{ID: call.ID, Name: call.Name, Arguments: call.Input})
+	}
+	idempotencyID, err := newUUID()
+	if err != nil {
+		return Verdict{}, &TransportError{Msg: "clavenar: failed to allocate decision identity: " + err.Error()}
+	}
+	body, err := json.Marshal(atomicBatchRequest{
+		JSONRPC: "2.0",
+		ID:      idempotencyID,
+		Method:  "clavenar/tools.batch",
+		Params: atomicBatchParams{
+			Name: "clavenar.atomic-batch",
+			Arguments: atomicBatchArguments{
+				Contract: "clavenar.atomic-tool-call-batch/v1",
+				Calls:    batchCalls,
+			},
+		},
+	})
+	if err != nil {
+		return Verdict{}, &TransportError{Msg: "clavenar inspect: failed to encode atomic batch: " + err.Error()}
+	}
+	return inspectDecision(ctx, body, idempotencyID, opts.withDefaults())
+}
+
+type atomicBatchCall struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+type atomicBatchArguments struct {
+	Contract string            `json:"contract"`
+	Calls    []atomicBatchCall `json:"calls"`
+}
+
+type atomicBatchParams struct {
+	Name      string               `json:"name"`
+	Arguments atomicBatchArguments `json:"arguments"`
+}
+
+type atomicBatchRequest struct {
+	JSONRPC string            `json:"jsonrpc"`
+	ID      string            `json:"id"`
+	Method  string            `json:"method"`
+	Params  atomicBatchParams `json:"params"`
+}
+
+func inspectDecision(ctx context.Context, body []byte, idempotencyID string, o Options) (Verdict, error) {
 	var lastErr error
 	for attempt := 0; attempt < o.Retry.MaxAttempts; attempt++ {
-		v, err := inspectOnce(ctx, call, o)
+		v, err := inspectOnce(ctx, body, idempotencyID, o)
 		if err == nil {
 			return v, nil
 		}
@@ -63,17 +153,7 @@ func Inspect(ctx context.Context, call ToolCall, opts Options) (Verdict, error) 
 	return Verdict{}, lastErr
 }
 
-func inspectOnce(ctx context.Context, call ToolCall, o Options) (Verdict, error) {
-	body, err := json.Marshal(inspectRequest{
-		JSONRPC: "2.0",
-		Method:  "tools/call",
-		Params:  inspectParams{Name: call.Name, Arguments: call.Input},
-		ID:      call.ID,
-	})
-	if err != nil {
-		return Verdict{}, &TransportError{Msg: "clavenar inspect: failed to encode request: " + err.Error()}
-	}
-
+func inspectOnce(ctx context.Context, body []byte, idempotencyID string, o Options) (Verdict, error) {
 	rctx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(rctx, http.MethodPost, joinURL(o.Endpoint, "/mcp"), bytes.NewReader(body))
@@ -81,6 +161,8 @@ func inspectOnce(ctx context.Context, call ToolCall, o Options) (Verdict, error)
 		return Verdict{}, &TransportError{Msg: "clavenar inspect: failed to build request: " + err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(decisionContractHeader, decisionContract)
+	req.Header.Set(idempotencyIDHeader, idempotencyID)
 	if o.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+o.Token)
 	}
@@ -112,6 +194,39 @@ func inspectOnce(ctx context.Context, call ToolCall, o Options) (Verdict, error)
 		}
 		return Verdict{}, &TransportError{Msg: msg, Status: resp.StatusCode}
 	}
+}
+
+func newUUID() (string, error) {
+	var value [16]byte
+	if _, err := cryptorand.Read(value[:]); err != nil {
+		return "", err
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	return fmt.Sprintf(
+		"%08x-%04x-%04x-%04x-%012x",
+		value[0:4],
+		value[4:6],
+		value[6:8],
+		value[8:10],
+		value[10:16],
+	), nil
+}
+
+func validUUID(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	for index := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		char := value[index]
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 // PollPendingOnce performs one GET /pending/{id}. 200 returns the parsed

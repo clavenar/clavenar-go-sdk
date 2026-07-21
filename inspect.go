@@ -3,14 +3,11 @@ package clavenar
 import (
 	"context"
 	"errors"
-
-	"golang.org/x/sync/errgroup"
 )
 
-// InspectAll inspects every tool call concurrently and, in enforce mode,
-// returns the first *Denied / *Pending / *RateLimited in submission
-// order — the first deny in calls[], not the first to come back over the
-// wire. OnVerdict fires per call before any deny->error translation.
+// InspectAll submits the complete ordered sibling set as one atomic decision.
+// In enforce mode, the first call in submission order represents a batch-level
+// deny, pending, or rate-limit verdict. OnVerdict fires per covered call.
 //
 // In observe mode nothing blocks: deny passes through, and a per-call
 // transport failure fires OnPolicyError and is treated as allowed so one
@@ -26,62 +23,50 @@ func InspectAll(ctx context.Context, calls []ToolCall, opts Options) error {
 	}
 	enforce := o.Mode == ModeEnforce
 
-	type result struct {
-		v   Verdict
-		err *TransportError
+	var v Verdict
+	var err error
+	if len(calls) == 1 {
+		v, err = Inspect(ctx, calls[0], o)
+	} else {
+		v, err = InspectBatch(ctx, calls, o)
 	}
-	results := make([]result, len(calls))
-
-	g, gctx := errgroup.WithContext(ctx)
-	for i := range calls {
-		g.Go(func() error {
-			v, err := Inspect(gctx, calls[i], o)
-			if err != nil {
-				var te *TransportError
-				if !enforce && errors.As(err, &te) {
-					results[i] = result{err: te}
-					return nil
+	if err != nil {
+		var te *TransportError
+		if enforce || !errors.As(err, &te) {
+			return err
+		}
+		for _, call := range calls {
+			if o.OnPolicyError != nil {
+				vctx := VerdictContext{ToolName: call.Name, ToolUseID: call.ID, ToolInput: call.Input}
+				if callbackErr := o.OnPolicyError(te, vctx); callbackErr != nil {
+					return callbackErr
 				}
-				return err
 			}
-			results[i] = result{v: v}
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return err
+		}
+		return nil
 	}
 
 	for i := range calls {
 		vctx := VerdictContext{ToolName: calls[i].Name, ToolUseID: calls[i].ID, ToolInput: calls[i].Input}
-		r := results[i]
-		if r.err != nil {
-			if o.OnPolicyError != nil {
-				if e := o.OnPolicyError(r.err, vctx); e != nil {
-					return e
-				}
-			}
-			continue
-		}
 		if o.OnVerdict != nil {
-			if e := o.OnVerdict(r.v, vctx); e != nil {
+			if e := o.OnVerdict(v, vctx); e != nil {
 				return e
 			}
 		}
 		if !enforce {
 			continue
 		}
-		switch r.v.Kind {
+		switch v.Kind {
 		case VerdictDeny:
-			denied := newDenied(calls[i], r.v)
+			denied := newDenied(calls[i], v)
 			if o.DevMode {
 				emitDenyPanel(denied)
 			}
 			return denied
 		case VerdictPending:
-			return newPending(calls[i], r.v, o)
+			return newPending(calls[i], v, o)
 		case VerdictRateLimited:
-			return newRateLimited(calls[i], r.v)
+			return newRateLimited(calls[i], v)
 		}
 	}
 	return nil

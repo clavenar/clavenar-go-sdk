@@ -20,14 +20,13 @@ decides.
 
 ## Batch inspect — `clavenar.InspectAll`
 
-1. Fan out one `Inspect` per call via `errgroup` (concurrent).
-2. Consume results in **submission order** — the first deny in `calls[]`
-   is the one returned, regardless of wire-order.
+1. Allocate one client UUID before network access.
+2. Submit the complete ordered sibling set through
+   `clavenar.atomic-tool-call-batch/v1` as one side-effect-free decision.
 3. `OnVerdict` fires per call before any deny→error translation.
 4. Enforce: first `Deny` → `*Denied`, first `Pending` → `*Pending`; a
-   transport error fails closed and cancels the remaining inspections.
-   Observe: nothing blocks; a per-call transport error fires
-   `OnPolicyError` and the call is treated as allowed.
+   transport error fails closed. Observe: nothing blocks; a batch transport
+   error fires `OnPolicyError` for every covered call.
 
 ## Streaming gate — adapters
 

@@ -73,8 +73,10 @@ OpenAI is the same shape:
 ## Verdicts and the error model
 
 `clavenar.Inspect` returns a `Verdict` whose `Kind` is `VerdictAllow`,
-`VerdictDeny`, `VerdictPending`, or `VerdictRateLimited`. `InspectAll`
-and the adapter facades translate, in enforce mode, into typed errors
+`VerdictDeny`, `VerdictPending`, or `VerdictRateLimited`. Every request
+explicitly selects the side-effect-free `clavenar.decision/v1` contract with
+a UUID allocated before the first attempt. `InspectAll` sends multi-tool turns
+as one ordered atomic decision. It and the adapter facades translate, in enforce mode, into typed errors
 you match with `errors.As`:
 
 | Error | Meaning |
