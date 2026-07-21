@@ -19,9 +19,11 @@ const (
 	ModeObserve
 )
 
-// Retry is the per-inspection retry policy. Network errors and 5xx
-// responses retry up to MaxAttempts with full-jitter exponential backoff
-// (BaseDelay*2^attempt); 200 / 403 / 429 / other-4xx never retry.
+// Retry applies only to explicit side-effect-free decisions. Network errors
+// and 5xx responses retry up to MaxAttempts with one stable pre-network
+// idempotency ID and full-jitter exponential backoff (BaseDelay*2^attempt);
+// effect-capable execution is outside this loop and never retries.
+// 200 / 403 / 429 / other-4xx never retry.
 type Retry struct {
 	MaxAttempts int
 	BaseDelay   time.Duration

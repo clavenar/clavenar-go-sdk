@@ -6,6 +6,15 @@ adheres to [Semantic Import Versioning](https://go.dev/ref/mod#versions).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-21
+
+### Changed
+
+- Automatic retries are explicitly confined to the side-effect-free decision
+  transport with one stable pre-network idempotency ID. Registered executor
+  failures remain single-attempt, and the shared retry-separation fixture is
+  packaged for cross-language conformance.
+
 ## [1.1.0] - 2026-07-21
 
 ### Added

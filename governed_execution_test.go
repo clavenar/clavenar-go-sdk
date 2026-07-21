@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const fixtureID = "cfcc8767-4c73-41cc-8ece-b855863924c4"
@@ -120,6 +122,39 @@ func TestExecutePreparedToolIntentFailureInvokesNoExecutor(t *testing.T) {
 	}
 	if called {
 		t.Fatal("executor ran after intent failure")
+	}
+}
+
+func TestExecutePreparedToolNeverRetriesExecutorFailure(t *testing.T) {
+	prepared, err := RestoreToolRequest(fixtureID, "payments.transfer", json.RawMessage(`{"amount":100}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decisions, effects int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&decisions, 1)
+		_, _ = w.Write(fixtureAuthorization(t, prepared))
+	}))
+	defer srv.Close()
+	order := []string{}
+	_, err = ExecutePreparedTool(context.Background(), prepared, GovernedExecutionOptions{
+		Decision:   New(srv.URL, WithRetry(Retry{MaxAttempts: 3, BaseDelay: time.Millisecond})),
+		ExecutorID: "payments-provider",
+		Store:      &recordingStore{order: &order},
+		Executor: func(context.Context, ToolExecutionRequest) (ExecutionEffect, error) {
+			atomic.AddInt32(&effects, 1)
+			return ExecutionEffect{}, errors.New("provider response lost")
+		},
+		Signer: func(context.Context, UnsignedExecutionReceipt) (WorkloadSignature, error) {
+			t.Fatal("signer ran after executor failure")
+			return WorkloadSignature{}, nil
+		},
+	})
+	if err == nil || err.Error() != "provider response lost" {
+		t.Fatalf("error = %v", err)
+	}
+	if atomic.LoadInt32(&decisions) != 1 || atomic.LoadInt32(&effects) != 1 {
+		t.Fatalf("decision/effect attempts = %d/%d, want 1/1", decisions, effects)
 	}
 }
 

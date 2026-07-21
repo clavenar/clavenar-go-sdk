@@ -358,7 +358,14 @@ func TestInspectMaxAttemptsBelowOne(t *testing.T) {
 
 func TestRetryThenSuccess(t *testing.T) {
 	var n int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	attempts := make(chan [3]string, 3)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		attempts <- [3]string{
+			string(body),
+			r.Header.Get(decisionContractHeader),
+			r.Header.Get(idempotencyIDHeader),
+		}
 		if atomic.AddInt32(&n, 1) < 3 {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
@@ -377,6 +384,19 @@ func TestRetryThenSuccess(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&n); got != 3 {
 		t.Fatalf("attempts = %d, want 3", got)
+	}
+	close(attempts)
+	var first [3]string
+	for attempt := range attempts {
+		if first == ([3]string{}) {
+			first = attempt
+		}
+		if attempt != first {
+			t.Fatalf("decision retry changed request identity or semantics: %v != %v", attempt, first)
+		}
+		if attempt[1] != decisionContract || attempt[2] == "" {
+			t.Fatalf("retry selector/id = %q/%q", attempt[1], attempt[2])
+		}
 	}
 }
 
