@@ -76,7 +76,9 @@ OpenAI is the same shape:
 `VerdictDeny`, `VerdictPending`, or `VerdictRateLimited`. Every request
 explicitly selects the side-effect-free `clavenar.decision/v1` contract with
 a UUID allocated before the first attempt. `InspectAll` sends multi-tool turns
-as one ordered atomic decision. It and the adapter facades translate, in enforce mode, into typed errors
+as one ordered atomic decision. Proxy 0.5.0 and Lite 0.9.0 reject unselected
+tool calls with HTTP 426; upgrade this SDK before the gateway by following
+<https://clavenar.com/docs/sdk-migration/>. It and the adapter facades translate, in enforce mode, into typed errors
 you match with `errors.As`:
 
 | Error | Meaning |

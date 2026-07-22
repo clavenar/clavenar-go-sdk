@@ -6,6 +6,14 @@ adheres to [Semantic Import Versioning](https://go.dev/ref/mod#versions).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-21
+
+### Changed
+
+- Package the exact `clavenar.client-migration/v1` fixture and schema and
+  document the client-first rollout. Inspection remains an explicit
+  side-effect-free decision with its canonical pre-network request ID.
+
 ## [1.2.0] - 2026-07-21
 
 ### Changed
