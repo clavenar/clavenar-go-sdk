@@ -6,6 +6,15 @@ adheres to [Semantic Import Versioning](https://go.dev/ref/mod#versions).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-26
+
+### Added
+
+- `SecureTransportProfile` reloads the complete CA/client identity and token
+  before each request and applies separate connect/request deadlines plus an
+  explicit direct/environment/URL proxy policy across inspection,
+  authorization, and polling.
+
 ## [1.3.0] - 2026-07-21
 
 ### Changed

@@ -324,6 +324,11 @@ func requestAuthorizationOnce(
 	idempotencyID string,
 	o Options,
 ) (SignedAuthorization, error) {
+	httpClient, token, closeTransport, transportErr := o.requestTransport(ctx)
+	if transportErr != nil {
+		return SignedAuthorization{}, transportErr
+	}
+	defer closeTransport()
 	rctx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(rctx, http.MethodPost, joinURL(o.Endpoint, "/mcp"), bytes.NewReader(body))
@@ -333,10 +338,10 @@ func requestAuthorizationOnce(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(decisionContractHeader, decisionContract)
 	req.Header.Set(idempotencyIDHeader, idempotencyID)
-	if o.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+o.Token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := o.HTTPClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return SignedAuthorization{}, &TransportError{Msg: "clavenar authorization failed: " + err.Error()}
 	}

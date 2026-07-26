@@ -154,6 +154,11 @@ func inspectDecision(ctx context.Context, body []byte, idempotencyID string, o O
 }
 
 func inspectOnce(ctx context.Context, body []byte, idempotencyID string, o Options) (Verdict, error) {
+	httpClient, token, closeTransport, transportErr := o.requestTransport(ctx)
+	if transportErr != nil {
+		return Verdict{}, transportErr
+	}
+	defer closeTransport()
 	rctx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(rctx, http.MethodPost, joinURL(o.Endpoint, "/mcp"), bytes.NewReader(body))
@@ -163,11 +168,11 @@ func inspectOnce(ctx context.Context, body []byte, idempotencyID string, o Optio
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(decisionContractHeader, decisionContract)
 	req.Header.Set(idempotencyIDHeader, idempotencyID)
-	if o.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+o.Token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := o.HTTPClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		if rctx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
 			return Verdict{}, &TransportError{Msg: fmt.Sprintf("clavenar inspect timed out after %s", o.Timeout)}
@@ -238,6 +243,11 @@ func PollPendingOnce(ctx context.Context, correlationID string, opts Options) (P
 		return PendingView{}, err
 	}
 	o := opts.withDefaults()
+	httpClient, token, closeTransport, transportErr := o.requestTransport(ctx)
+	if transportErr != nil {
+		return PendingView{}, transportErr
+	}
+	defer closeTransport()
 
 	rctx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
@@ -246,11 +256,11 @@ func PollPendingOnce(ctx context.Context, correlationID string, opts Options) (P
 	if err != nil {
 		return PendingView{}, &TransportError{Msg: "clavenar poll: failed to build request: " + err.Error()}
 	}
-	if o.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+o.Token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := o.HTTPClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		if rctx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
 			return PendingView{}, &TransportError{Msg: fmt.Sprintf("clavenar poll timed out after %s", o.Timeout)}

@@ -1,6 +1,7 @@
 package clavenar
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"time"
@@ -45,6 +46,9 @@ type Options struct {
 	Timeout    time.Duration
 	Retry      Retry
 	HTTPClient HTTPDoer
+	// SecureTransport reloads CA, client identity and token before each
+	// request. It cannot be combined with Token or HTTPClient.
+	SecureTransport *SecureTransportProfile
 	// OnVerdict fires once per inspected call before any deny->error
 	// translation, in both modes. A non-nil return aborts the batch.
 	OnVerdict func(Verdict, VerdictContext) error
@@ -67,6 +71,9 @@ const (
 )
 
 func (o Options) withDefaults() Options {
+	if o.SecureTransport != nil && o.SecureTransport.RequestTimeout != 0 {
+		o.Timeout = o.SecureTransport.RequestTimeout
+	}
 	if o.Timeout == 0 {
 		o.Timeout = defaultTimeout
 	}
@@ -76,7 +83,7 @@ func (o Options) withDefaults() Options {
 	if o.Retry.BaseDelay == 0 {
 		o.Retry.BaseDelay = defaultBaseDelay
 	}
-	if o.HTTPClient == nil {
+	if o.HTTPClient == nil && o.SecureTransport == nil {
 		o.HTTPClient = &http.Client{}
 	}
 	return o
@@ -96,7 +103,21 @@ func (o Options) validate() error {
 	if o.Mode != ModeEnforce && o.Mode != ModeObserve {
 		return &ConfigError{Msg: "clavenar: Options.Mode must be ModeEnforce or ModeObserve"}
 	}
+	if o.SecureTransport != nil && (o.HTTPClient != nil || o.Token != "") {
+		return &ConfigError{Msg: "clavenar: SecureTransport cannot be combined with Token or HTTPClient"}
+	}
 	return nil
+}
+
+func (o Options) requestTransport(ctx context.Context) (HTTPDoer, string, func(), error) {
+	if o.SecureTransport == nil {
+		return o.HTTPClient, o.Token, func() {}, nil
+	}
+	client, token, err := o.SecureTransport.client(ctx)
+	if err != nil {
+		return nil, "", func() {}, err
+	}
+	return client, token, client.CloseIdleConnections, nil
 }
 
 // Option is a functional option for New.
@@ -128,6 +149,11 @@ func WithRetry(r Retry) Option { return func(o *Options) { o.Retry = r } }
 
 // WithHTTPClient injects an HTTP client (tests, custom transports).
 func WithHTTPClient(c HTTPDoer) Option { return func(o *Options) { o.HTTPClient = c } }
+
+// WithSecureTransport installs one reusable reload-before-request profile.
+func WithSecureTransport(profile *SecureTransportProfile) Option {
+	return func(o *Options) { o.SecureTransport = profile }
+}
 
 // WithOnVerdict registers the per-call verdict callback.
 func WithOnVerdict(f func(Verdict, VerdictContext) error) Option {
