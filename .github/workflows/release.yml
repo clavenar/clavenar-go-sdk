@@ -1,14 +1,9 @@
 name: release
-
-# Push a tag matching v* (e.g. v1.0.0) to cut a release: tests run, then
-# goreleaser publishes a GitHub release with the source archive,
-# checksums, an SBOM, and a cosign-keyless signature. Go modules need no
-# registry upload — `go get` resolves the tag via the module proxy.
+run-name: publish ${{ github.event.client_payload.publication_id }}
 
 on:
-  push:
-    tags:
-      - 'v*'
+  repository_dispatch:
+    types: [clavenar-protected-publication]
 
 permissions:
   contents: write
@@ -20,37 +15,85 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          ref: ${{ github.event.client_payload.source_sha }}
           fetch-depth: 0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.24.13'
           cache: true
 
-      - name: Check semantic import path
+      - name: Verify protected publication input
+        env:
+          COMPONENT_VERSION: ${{ github.event.client_payload.component_version }}
+          RELEASE_REFERENCE: ${{ github.event.client_payload.release_reference }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
         run: |
-          MAJOR="$(echo "${GITHUB_REF_NAME}" | sed -E 's/^v([0-9]+).*/\1/')"
+          test "$GITHUB_ACTOR" = "vanteguardlabs"
+          [[ "$RELEASE_REFERENCE" =~ ^ghcr\.io/clavenar/clavenar-stack-release@sha256:[0-9a-f]{64}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          VERSION="$COMPONENT_VERSION"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(tr -d '[:space:]' < VERSION)" = "$VERSION"
+          MAJOR="${VERSION%%.*}"
           if [ "$MAJOR" -ge 2 ]; then
             grep -qE "^module .*/v$MAJOR$" go.mod || {
-              echo "::error::module path must end in /v$MAJOR for tag ${GITHUB_REF_NAME}"; exit 1; }
+              echo "::error::module path must end in /v$MAJOR for version $VERSION"; exit 1; }
+          fi
+          for module in adapters/anthropic adapters/openai examples; do
+            grep -q "github.com/clavenar/clavenar-go-sdk v$VERSION" \
+              "$module/go.mod"
+          done
+
+      - name: Test every Go module
+        run: |
+          test -z "$(gofmt -l .)"
+          for module in . adapters/anthropic adapters/openai examples; do
+            (cd "$module" && go vet ./...)
+            (cd "$module" && go test -race -count=1 ./...)
+          done
+
+      - name: Publish the exact root and nested module tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.event.client_payload.component_version }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+        run: |
+          ensure_tag() {
+            local tag="$1"
+            local encoded="${tag//\//%2F}"
+            local existing
+            existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$encoded" \
+              --jq '.object.sha' 2>/dev/null || true)"
+            if [ -n "$existing" ]; then
+              test "$existing" = "$SOURCE_SHA"
+            else
+              gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+                -f "ref=refs/tags/$tag" -f "sha=$SOURCE_SHA" >/dev/null
+            fi
+          }
+          ensure_tag "v$VERSION"
+          ensure_tag "adapters/anthropic/v$VERSION"
+          ensure_tag "adapters/openai/v$VERSION"
+          ensure_tag "examples/v$VERSION"
+          if ! gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release create "v$VERSION" --verify-tag \
+              --title "v$VERSION — Clavenar Go SDK" \
+              --notes "Published with exact nested-module tags from the accepted protected Clavenar release."
           fi
 
-      - run: go test -race -count=1 ./...
-
-      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          syft-version: v1.46.0
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
-        with:
-          cosign-release: v2.5.2
-
-      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
-        with:
-          version: 'v2.17.0'
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Warm the module proxy
+        env:
+          VERSION: ${{ github.event.client_payload.component_version }}
         run: |
-          GOPROXY=proxy.golang.org go list -m \
-            github.com/clavenar/clavenar-go-sdk@${GITHUB_REF_NAME} || true
+          for module in \
+            github.com/clavenar/clavenar-go-sdk \
+            github.com/clavenar/clavenar-go-sdk/adapters/anthropic \
+            github.com/clavenar/clavenar-go-sdk/adapters/openai; do
+            for attempt in 1 2 3 4 5; do
+              if GOPROXY=proxy.golang.org go list -m "$module@v$VERSION"; then
+                break
+              fi
+              test "$attempt" -lt 5
+              sleep 6
+            done
+          done

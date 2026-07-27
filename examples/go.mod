@@ -4,9 +4,9 @@ go 1.24
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.48.0
-	github.com/clavenar/clavenar-go-sdk v0.0.0
-	github.com/clavenar/clavenar-go-sdk/adapters/anthropic v0.0.0
-	github.com/clavenar/clavenar-go-sdk/adapters/openai v0.0.0
+	github.com/clavenar/clavenar-go-sdk v1.0.0
+	github.com/clavenar/clavenar-go-sdk/adapters/anthropic v1.0.0
+	github.com/clavenar/clavenar-go-sdk/adapters/openai v1.0.0
 	github.com/openai/openai-go/v2 v2.7.1
 )
 

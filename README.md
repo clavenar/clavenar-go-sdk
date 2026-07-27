@@ -15,15 +15,15 @@ Part of the by-language agent-wrapper SDK family alongside
 ## Install
 
 ```bash
-go get github.com/clavenar/clavenar-go-sdk@latest
+go get github.com/clavenar/clavenar-go-sdk@v1.0.0
 ```
 
 The core package has **no provider dependency**. Provider adapters are
 opt-in sub-modules:
 
 ```bash
-go get github.com/clavenar/clavenar-go-sdk/adapters/anthropic@latest
-go get github.com/clavenar/clavenar-go-sdk/adapters/openai@latest
+go get github.com/clavenar/clavenar-go-sdk/adapters/anthropic@v1.0.0
+go get github.com/clavenar/clavenar-go-sdk/adapters/openai@v1.0.0
 ```
 
 ## Two ways to integrate
