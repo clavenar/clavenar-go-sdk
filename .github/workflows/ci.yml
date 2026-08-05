@@ -13,15 +13,19 @@ jobs:
   core:
     name: core (go ${{ matrix.go }})
     runs-on: self-hosted
-    env:
-      GOMODCACHE: ${{ github.workspace }}/.ci/gomod-${{ github.run_id }}-${{ github.run_attempt }}-core-${{ matrix.go }}
-      GOCACHE: ${{ github.workspace }}/.ci/gocache-${{ github.run_id }}-${{ github.run_attempt }}-core-${{ matrix.go }}
     strategy:
       fail-fast: false
       matrix:
         go: ['1.22.12', '1.23.12', '1.24.13']
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Prepare isolated Go caches
+        env:
+          CACHE_VARIANT: ${{ matrix.go }}
+        run: |
+          suffix="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB-${CACHE_VARIANT//\//-}"
+          echo "GOMODCACHE=$RUNNER_TEMP/gomod-$suffix" >> "$GITHUB_ENV"
+          echo "GOCACHE=$RUNNER_TEMP/gocache-$suffix" >> "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '${{ matrix.go }}'
@@ -37,15 +41,19 @@ jobs:
   adapters:
     name: adapter ${{ matrix.module }}
     runs-on: self-hosted
-    env:
-      GOMODCACHE: ${{ github.workspace }}/.ci/gomod-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.module }}
-      GOCACHE: ${{ github.workspace }}/.ci/gocache-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.module }}
     strategy:
       fail-fast: false
       matrix:
         module: [adapters/anthropic, adapters/openai]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Prepare isolated Go caches
+        env:
+          CACHE_VARIANT: ${{ matrix.module }}
+        run: |
+          suffix="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB-${CACHE_VARIANT//\//-}"
+          echo "GOMODCACHE=$RUNNER_TEMP/gomod-$suffix" >> "$GITHUB_ENV"
+          echo "GOCACHE=$RUNNER_TEMP/gocache-$suffix" >> "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.24.13'
@@ -57,11 +65,13 @@ jobs:
 
   examples:
     runs-on: self-hosted
-    env:
-      GOMODCACHE: ${{ github.workspace }}/.ci/gomod-${{ github.run_id }}-${{ github.run_attempt }}-examples
-      GOCACHE: ${{ github.workspace }}/.ci/gocache-${{ github.run_id }}-${{ github.run_attempt }}-examples
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Prepare isolated Go caches
+        run: |
+          suffix="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          echo "GOMODCACHE=$RUNNER_TEMP/gomod-$suffix" >> "$GITHUB_ENV"
+          echo "GOCACHE=$RUNNER_TEMP/gocache-$suffix" >> "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.24.13'
@@ -71,11 +81,13 @@ jobs:
 
   lint:
     runs-on: self-hosted
-    env:
-      GOMODCACHE: ${{ github.workspace }}/.ci/gomod-${{ github.run_id }}-${{ github.run_attempt }}-lint
-      GOCACHE: ${{ github.workspace }}/.ci/gocache-${{ github.run_id }}-${{ github.run_attempt }}-lint
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Prepare isolated Go caches
+        run: |
+          suffix="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          echo "GOMODCACHE=$RUNNER_TEMP/gomod-$suffix" >> "$GITHUB_ENV"
+          echo "GOCACHE=$RUNNER_TEMP/gocache-$suffix" >> "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.24.13'
@@ -90,11 +102,13 @@ jobs:
   vuln:
     name: govulncheck
     runs-on: self-hosted
-    env:
-      GOMODCACHE: ${{ github.workspace }}/.ci/gomod-${{ github.run_id }}-${{ github.run_attempt }}-vuln
-      GOCACHE: ${{ github.workspace }}/.ci/gocache-${{ github.run_id }}-${{ github.run_attempt }}-vuln
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Prepare isolated Go caches
+        run: |
+          suffix="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          echo "GOMODCACHE=$RUNNER_TEMP/gomod-$suffix" >> "$GITHUB_ENV"
+          echo "GOCACHE=$RUNNER_TEMP/gocache-$suffix" >> "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           # Scan with the current patched toolchain while the core matrix
