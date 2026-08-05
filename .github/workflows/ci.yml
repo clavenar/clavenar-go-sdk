@@ -24,8 +24,10 @@ jobs:
           CACHE_VARIANT: ${{ matrix.go }}
         run: |
           suffix="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB-${CACHE_VARIANT//\//-}"
+          install -d -m 0700 "$RUNNER_TEMP/gotmp-$suffix"
           echo "GOMODCACHE=$RUNNER_TEMP/gomod-$suffix" >> "$GITHUB_ENV"
           echo "GOCACHE=$RUNNER_TEMP/gocache-$suffix" >> "$GITHUB_ENV"
+          echo "GOTMPDIR=$RUNNER_TEMP/gotmp-$suffix" >> "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '${{ matrix.go }}'
@@ -52,8 +54,10 @@ jobs:
           CACHE_VARIANT: ${{ matrix.module }}
         run: |
           suffix="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB-${CACHE_VARIANT//\//-}"
+          install -d -m 0700 "$RUNNER_TEMP/gotmp-$suffix"
           echo "GOMODCACHE=$RUNNER_TEMP/gomod-$suffix" >> "$GITHUB_ENV"
           echo "GOCACHE=$RUNNER_TEMP/gocache-$suffix" >> "$GITHUB_ENV"
+          echo "GOTMPDIR=$RUNNER_TEMP/gotmp-$suffix" >> "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.24.13'
@@ -70,8 +74,10 @@ jobs:
       - name: Prepare isolated Go caches
         run: |
           suffix="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          install -d -m 0700 "$RUNNER_TEMP/gotmp-$suffix"
           echo "GOMODCACHE=$RUNNER_TEMP/gomod-$suffix" >> "$GITHUB_ENV"
           echo "GOCACHE=$RUNNER_TEMP/gocache-$suffix" >> "$GITHUB_ENV"
+          echo "GOTMPDIR=$RUNNER_TEMP/gotmp-$suffix" >> "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.24.13'
@@ -86,8 +92,10 @@ jobs:
       - name: Prepare isolated Go caches
         run: |
           suffix="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          install -d -m 0700 "$RUNNER_TEMP/gotmp-$suffix"
           echo "GOMODCACHE=$RUNNER_TEMP/gomod-$suffix" >> "$GITHUB_ENV"
           echo "GOCACHE=$RUNNER_TEMP/gocache-$suffix" >> "$GITHUB_ENV"
+          echo "GOTMPDIR=$RUNNER_TEMP/gotmp-$suffix" >> "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.24.13'
@@ -107,8 +115,10 @@ jobs:
       - name: Prepare isolated Go caches
         run: |
           suffix="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          install -d -m 0700 "$RUNNER_TEMP/gotmp-$suffix"
           echo "GOMODCACHE=$RUNNER_TEMP/gomod-$suffix" >> "$GITHUB_ENV"
           echo "GOCACHE=$RUNNER_TEMP/gocache-$suffix" >> "$GITHUB_ENV"
+          echo "GOTMPDIR=$RUNNER_TEMP/gotmp-$suffix" >> "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           # Scan with the current patched toolchain while the core matrix
