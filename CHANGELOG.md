@@ -6,6 +6,8 @@ adheres to [Semantic Import Versioning](https://go.dev/ref/mod#versions).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-05
+
 ### Security
 
 - Validate decision endpoints and retry bounds, require an explicit

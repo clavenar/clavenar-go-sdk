@@ -6,7 +6,7 @@ replace github.com/clavenar/clavenar-go-sdk => ../..
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.48.0
-	github.com/clavenar/clavenar-go-sdk v1.0.0
+	github.com/clavenar/clavenar-go-sdk v1.5.0
 )
 
 require (

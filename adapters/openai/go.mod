@@ -5,7 +5,7 @@ go 1.22
 replace github.com/clavenar/clavenar-go-sdk => ../..
 
 require (
-	github.com/clavenar/clavenar-go-sdk v1.0.0
+	github.com/clavenar/clavenar-go-sdk v1.5.0
 	github.com/openai/openai-go/v2 v2.7.1
 )
 
