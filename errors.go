@@ -24,6 +24,17 @@ type TransportError struct {
 
 func (e *TransportError) Error() string { return e.Msg }
 
+// RecoveryRequired means an execution intent exists without a durable
+// completion and no recoverer could prove the provider effect. The SDK fails
+// closed instead of invoking the executor a second time.
+type RecoveryRequired struct {
+	IdempotencyID string
+}
+
+func (e *RecoveryRequired) Error() string {
+	return fmt.Sprintf("clavenar execution %s requires provider reconciliation", e.IdempotencyID)
+}
+
 // Denied is returned (enforce mode) when clavenar rejects a tool call.
 type Denied struct {
 	ToolName       string
@@ -73,7 +84,7 @@ const (
 // Resolve blocks until an operator decides the pending call. It polls
 // GET /pending/{id} every PollInterval and returns nil on approve or
 // *Denied on deny. Transient transport failures (5xx, network) are
-// swallowed between polls; 401 / 404 are terminal. A blown deadline or a
+// swallowed between polls; all protocol and 4xx failures are terminal. A blown deadline or a
 // cancelled ctx returns an error.
 func (e *Pending) Resolve(ctx context.Context, opts *ResolveOptions) error {
 	pollInterval := defaultPollInterval
@@ -99,10 +110,9 @@ func (e *Pending) Resolve(ctx context.Context, opts *ResolveOptions) error {
 		if err != nil {
 			var te *TransportError
 			if errors.As(err, &te) {
-				// 401 / 404 are terminal: auth misconfig, or the pending
-				// vanished. Everything else (5xx, network blip) is
-				// swallowed and retried next tick.
-				if te.Status == 401 || te.Status == 404 {
+				// Only network failures and 5xx responses are transient.
+				// Malformed success bodies and all 4xx responses are terminal.
+				if !isRetriable(te) {
 					return err
 				}
 			} else {

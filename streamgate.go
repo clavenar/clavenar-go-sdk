@@ -26,7 +26,16 @@ type StreamGate struct {
 	opts  Options
 	bufs  map[string]*toolBuf
 	order []string
+	bytes int
+	err   error
 }
+
+const (
+	maxDecisionBatchCalls  = 128
+	maxToolArgumentsBytes  = 1 << 20
+	maxToolBatchBytes      = 4 << 20
+	maxToolIdentifierBytes = 1024
+)
 
 type toolBuf struct {
 	id   string
@@ -40,8 +49,19 @@ func NewStreamGate(opts Options) *StreamGate {
 }
 
 func (g *StreamGate) ensure(key string) *toolBuf {
+	if g.err != nil {
+		return nil
+	}
+	if key == "" || len(key) > maxToolIdentifierBytes {
+		g.fail("tool call key is empty or too large")
+		return nil
+	}
 	b := g.bufs[key]
 	if b == nil {
+		if len(g.bufs) >= maxDecisionBatchCalls {
+			g.fail("too many open tool calls")
+			return nil
+		}
 		b = &toolBuf{}
 		g.bufs[key] = b
 		g.order = append(g.order, key)
@@ -49,9 +69,26 @@ func (g *StreamGate) ensure(key string) *toolBuf {
 	return b
 }
 
+func (g *StreamGate) fail(message string) {
+	if g.err == nil {
+		g.err = &ConfigError{Msg: "clavenar stream: " + message}
+	}
+}
+
 // Start registers an opening tool call under key with its id and name.
 func (g *StreamGate) Start(key, id, name string) {
+	if _, exists := g.bufs[key]; exists {
+		g.fail("duplicate start for tool call key " + key)
+		return
+	}
 	b := g.ensure(key)
+	if b == nil {
+		return
+	}
+	if len(id) > maxToolIdentifierBytes || len(name) > maxToolIdentifierBytes {
+		g.fail("tool call id or name is too large")
+		return
+	}
 	b.id = id
 	b.name = name
 }
@@ -61,14 +98,34 @@ func (g *StreamGate) Start(key, id, name string) {
 // are ignored.
 func (g *StreamGate) Update(key, id, name, argsFragment string) {
 	b := g.ensure(key)
+	if b == nil {
+		return
+	}
+	if len(id) > maxToolIdentifierBytes || len(name) > maxToolIdentifierBytes {
+		g.fail("tool call id or name is too large")
+		return
+	}
 	if id != "" {
+		if b.id != "" && b.id != id {
+			g.fail("tool call id changed for key " + key)
+			return
+		}
 		b.id = id
 	}
 	if name != "" {
+		if b.name != "" && b.name != name {
+			g.fail("tool call name changed for key " + key)
+			return
+		}
 		b.name = name
 	}
 	if argsFragment != "" {
+		if b.args.Len()+len(argsFragment) > maxToolArgumentsBytes || g.bytes+len(argsFragment) > maxToolBatchBytes {
+			g.fail("tool call arguments exceed the configured safety limit")
+			return
+		}
 		b.args.WriteString(argsFragment)
+		g.bytes += len(argsFragment)
 	}
 }
 
@@ -83,6 +140,9 @@ func (g *StreamGate) Has(key string) bool {
 // open buffer are skipped, so calling Close on every closing event —
 // including non-tool blocks — is safe.
 func (g *StreamGate) Close(ctx context.Context, keys ...string) error {
+	if g.err != nil {
+		return g.err
+	}
 	calls := make([]ToolCall, 0, len(keys))
 	closed := make(map[string]bool, len(keys))
 	for _, key := range keys {
@@ -91,6 +151,7 @@ func (g *StreamGate) Close(ctx context.Context, keys ...string) error {
 			continue
 		}
 		delete(g.bufs, key)
+		g.bytes -= b.args.Len()
 		closed[key] = true
 		call, err := b.toCall()
 		if err != nil {

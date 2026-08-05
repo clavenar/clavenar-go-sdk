@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,19 @@ type recordingStore struct {
 	intent     ExecutionIntent
 	completion ExecutionCompletion
 	failIntent bool
+}
+
+func (s *recordingStore) LoadExecution(_ context.Context, _ string) (ExecutionState, error) {
+	state := ExecutionState{}
+	if s.intent.IdempotencyID != "" {
+		intent := s.intent
+		state.Intent = &intent
+	}
+	if s.completion.IdempotencyID != "" {
+		completion := s.completion
+		state.Completion = &completion
+	}
+	return state, nil
 }
 
 func (s *recordingStore) CommitIntent(_ context.Context, intent ExecutionIntent) error {
@@ -58,9 +72,10 @@ func TestExecutePreparedToolDurableOrderAndActualResult(t *testing.T) {
 	order := []string{}
 	store := &recordingStore{order: &order}
 	outcome, err := ExecutePreparedTool(context.Background(), prepared, GovernedExecutionOptions{
-		Decision:   New(srv.URL),
-		ExecutorID: "payments-provider",
-		Store:      store,
+		Decision:            New(srv.URL),
+		ExecutorID:          "payments-provider",
+		Store:               store,
+		AuthorizationVerify: func(context.Context, SignedAuthorization) error { return nil },
 		Executor: func(_ context.Context, request ToolExecutionRequest) (ExecutionEffect, error) {
 			order = append(order, "effect")
 			if request.IdempotencyID != fixtureID {
@@ -106,9 +121,10 @@ func TestExecutePreparedToolIntentFailureInvokesNoExecutor(t *testing.T) {
 	order := []string{}
 	called := false
 	_, err = ExecutePreparedTool(context.Background(), prepared, GovernedExecutionOptions{
-		Decision:   New(srv.URL),
-		ExecutorID: "payments-provider",
-		Store:      &recordingStore{order: &order, failIntent: true},
+		Decision:            New(srv.URL),
+		ExecutorID:          "payments-provider",
+		Store:               &recordingStore{order: &order, failIntent: true},
+		AuthorizationVerify: func(context.Context, SignedAuthorization) error { return nil },
 		Executor: func(context.Context, ToolExecutionRequest) (ExecutionEffect, error) {
 			called = true
 			return ExecutionEffect{}, nil
@@ -138,9 +154,10 @@ func TestExecutePreparedToolNeverRetriesExecutorFailure(t *testing.T) {
 	defer srv.Close()
 	order := []string{}
 	_, err = ExecutePreparedTool(context.Background(), prepared, GovernedExecutionOptions{
-		Decision:   New(srv.URL, WithRetry(Retry{MaxAttempts: 3, BaseDelay: time.Millisecond})),
-		ExecutorID: "payments-provider",
-		Store:      &recordingStore{order: &order},
+		Decision:            New(srv.URL, WithRetry(Retry{MaxAttempts: 3, BaseDelay: time.Millisecond})),
+		ExecutorID:          "payments-provider",
+		Store:               &recordingStore{order: &order},
+		AuthorizationVerify: func(context.Context, SignedAuthorization) error { return nil },
 		Executor: func(context.Context, ToolExecutionRequest) (ExecutionEffect, error) {
 			atomic.AddInt32(&effects, 1)
 			return ExecutionEffect{}, errors.New("provider response lost")
@@ -184,6 +201,147 @@ func TestInspectBatchUsesOneOrderedDecision(t *testing.T) {
 	}
 }
 
+func TestExecutePreparedToolRejectsUnverifiedAuthorization(t *testing.T) {
+	prepared, err := RestoreToolRequest(fixtureID, "payments.transfer", json.RawMessage(`{"amount":100}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixtureAuthorization(t, prepared))
+	}))
+	defer srv.Close()
+	order := []string{}
+	_, err = ExecutePreparedTool(context.Background(), prepared, GovernedExecutionOptions{
+		Decision:   New(srv.URL),
+		ExecutorID: "payments-provider",
+		Store:      &recordingStore{order: &order},
+		Executor: func(context.Context, ToolExecutionRequest) (ExecutionEffect, error) {
+			t.Fatal("executor ran")
+			return ExecutionEffect{}, nil
+		},
+		Signer: func(context.Context, UnsignedExecutionReceipt) (WorkloadSignature, error) {
+			return WorkloadSignature{}, nil
+		},
+		AuthorizationVerify: func(context.Context, SignedAuthorization) error { return errors.New("unknown identity key") },
+	})
+	var ce *ConfigError
+	if !errors.As(err, &ce) || !strings.Contains(ce.Msg, "signature verification failed") {
+		t.Fatalf("want signature verification ConfigError, got %v", err)
+	}
+	if len(order) != 0 {
+		t.Fatalf("unverified authorization reached durable store: %v", order)
+	}
+}
+
+func TestExecutePreparedToolFailsClosedOnUnreconciledIntent(t *testing.T) {
+	prepared, err := RestoreToolRequest(fixtureID, "payments.transfer", json.RawMessage(`{"amount":100}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := fixtureSignedAuthorization(t, prepared)
+	auth := signed.Authorization
+	order := []string{}
+	store := &recordingStore{order: &order, intent: ExecutionIntent{
+		Contract: DurableExecutionContract, Stage: "execution.intent", AuthorizationID: auth.AuthorizationID,
+		IdempotencyID: auth.IdempotencyID, Tenant: auth.Tenant, WorkloadID: auth.AgentID,
+		WorkloadSPIFFE: auth.AgentSPIFFE, PayloadSHA256: auth.PayloadSHA256,
+		ExecutorID: "payments-provider", Authorization: signed,
+	}}
+	_, err = ExecutePreparedTool(context.Background(), prepared, GovernedExecutionOptions{
+		Decision: New("https://clavenar.invalid"), ExecutorID: "payments-provider", Store: store,
+		Executor: func(context.Context, ToolExecutionRequest) (ExecutionEffect, error) {
+			t.Fatal("executor repeated an indeterminate effect")
+			return ExecutionEffect{}, nil
+		},
+		Signer: func(context.Context, UnsignedExecutionReceipt) (WorkloadSignature, error) {
+			return WorkloadSignature{}, nil
+		},
+		AuthorizationVerify: func(context.Context, SignedAuthorization) error { return nil },
+	})
+	var recovery *RecoveryRequired
+	if !errors.As(err, &recovery) || recovery.IdempotencyID != fixtureID {
+		t.Fatalf("want RecoveryRequired, got %v", err)
+	}
+}
+
+func TestExecutePreparedToolRecoversEffectWithoutRepeatingExecutor(t *testing.T) {
+	prepared, err := RestoreToolRequest(fixtureID, "payments.transfer", json.RawMessage(`{"amount":100}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := fixtureSignedAuthorization(t, prepared)
+	auth := signed.Authorization
+	order := []string{}
+	store := &recordingStore{order: &order, intent: ExecutionIntent{
+		Contract: DurableExecutionContract, Stage: "execution.intent", AuthorizationID: auth.AuthorizationID,
+		IdempotencyID: auth.IdempotencyID, Tenant: auth.Tenant, WorkloadID: auth.AgentID,
+		WorkloadSPIFFE: auth.AgentSPIFFE, PayloadSHA256: auth.PayloadSHA256,
+		ExecutorID: "payments-provider", Authorization: signed,
+	}}
+	outcome, err := ExecutePreparedTool(context.Background(), prepared, GovernedExecutionOptions{
+		Decision: New("https://clavenar.invalid"), ExecutorID: "payments-provider", Store: store,
+		Executor: func(context.Context, ToolExecutionRequest) (ExecutionEffect, error) {
+			t.Fatal("executor repeated a recovered effect")
+			return ExecutionEffect{}, nil
+		},
+		Recoverer: func(context.Context, ExecutionIntent) (ExecutionEffect, bool, error) {
+			return ExecutionEffect{Result: json.RawMessage(`{"ok":true}`), EffectID: "provider-operation-123"}, true, nil
+		},
+		Signer: func(context.Context, UnsignedExecutionReceipt) (WorkloadSignature, error) {
+			return WorkloadSignature{Algorithm: "ES256", CredentialFingerprint: auth.CredentialFingerprint, Value: "signed"}, nil
+		},
+		AuthorizationVerify: func(context.Context, SignedAuthorization) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.EffectID != "provider-operation-123" || store.completion.EffectID != outcome.EffectID {
+		t.Fatalf("recovered outcome = %+v", outcome)
+	}
+}
+
+func TestCanonicalJSONPreservesLargeInteger(t *testing.T) {
+	got, err := canonicalJSON([]byte(`{"value":9007199254740993}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"value":9007199254740993}` {
+		t.Fatalf("large integer changed during canonicalization: %s", got)
+	}
+}
+
+func TestCanonicalJSONRejectsIntegersOutsideSupportedRange(t *testing.T) {
+	for _, raw := range []string{
+		`{"value":18446744073709551616}`,
+		`{"value":-9223372036854775809}`,
+	} {
+		if _, err := canonicalJSON([]byte(raw)); err == nil {
+			t.Fatalf("canonicalJSON(%s) unexpectedly accepted an out-of-range integer", raw)
+		}
+	}
+}
+
+func TestRestoreToolRequestAppliesInspectionInputLimits(t *testing.T) {
+	_, err := RestoreToolRequest(
+		fixtureID,
+		"payments.transfer",
+		json.RawMessage(strings.Repeat("x", maxToolArgumentsBytes+1)),
+	)
+	var configErr *ConfigError
+	if !errors.As(err, &configErr) || !strings.Contains(configErr.Msg, "safety limit") {
+		t.Fatalf("want bounded prepared-request ConfigError, got %v", err)
+	}
+}
+
+func fixtureSignedAuthorization(t *testing.T, prepared PreparedToolRequest) SignedAuthorization {
+	t.Helper()
+	var signed SignedAuthorization
+	if err := json.Unmarshal(fixtureAuthorization(t, prepared), &signed); err != nil {
+		t.Fatal(err)
+	}
+	return signed
+}
+
 func fixtureAuthorization(t *testing.T, prepared PreparedToolRequest) []byte {
 	t.Helper()
 	payload, err := json.Marshal(inspectRequest{
@@ -192,6 +350,10 @@ func fixtureAuthorization(t *testing.T, prepared PreparedToolRequest) []byte {
 		Params:  inspectParams{Name: prepared.Name, Arguments: prepared.Arguments},
 		ID:      prepared.IdempotencyID,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloadSHA256, err := hashCanonicalJSON(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +371,7 @@ func fixtureAuthorization(t *testing.T, prepared PreparedToolRequest) []byte {
 			Method:                "tools/call",
 			ToolName:              prepared.Name,
 			ExecutionPayload:      payload,
-			PayloadSHA256:         "sha256:" + repeat("2", 64),
+			PayloadSHA256:         payloadSHA256,
 			DecisionPrincipal:     json.RawMessage(`{"subject":"system:policy-brain"}`),
 			ModificationDiff:      json.RawMessage(`null`),
 			PolicyBundle:          json.RawMessage(`{"schema_version":1}`),

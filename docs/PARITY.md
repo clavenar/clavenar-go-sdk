@@ -21,7 +21,7 @@ validate the response body leniently while TS strictly validates the full
 | Enforce | first deny → `Denied`, pending → `Pending`, rate-limit → `RateLimited`; transport error fails closed, `OnPolicyError` not called |
 | Observe | nothing blocks; per-call transport failure → `OnPolicyError`, treated as allowed |
 | Streaming | closing event held until verdict; empty args → `{}`; unparseable drained args → `ConfigError` |
-| Resolve | poll `GET /pending/{id}` every 2s, ceiling 10m; deny → `Denied` (`IntentCategory="PendingDenied"`, reason = decider note or `"operator denied"`); 401/404 terminal; 5xx/network swallowed |
+| Resolve | poll `GET /pending/{id}` every 2s, ceiling 10m; deny → `Denied` (`IntentCategory="PendingDenied"`, reason = decider note or `"operator denied"`); every 4xx/protocol error terminal; 5xx/network swallowed |
 | OpenAI non-streaming, unparseable args | `ConfigError` (matches TS, not Python's raw-string fallback) |
 | Realtime | `arguments` forwarded as a raw JSON string on parse failure |
 | URL join | trims one trailing/leading slash; never drops a base path like `https://gw/clavenar` |
@@ -42,11 +42,9 @@ None change wire bytes or verdict outcomes:
    `TransportError` are pointer error types with the same fields (TS
    naming), matched with `errors.As`. `TransportError.Status == 0` is the
    Go encoding of TS's `status === undefined` ("no HTTP response").
-4. **errgroup cancellation.** On an enforce-mode transport error the
-   remaining in-flight inspections are cancelled — a latency optimization
-   with no observable difference (enforce fails closed regardless of
-   which call wins the race; denies are still decided in submission
-   order).
+4. **Atomic sibling batches.** Multi-tool turns are submitted as one ordered
+   `clavenar/tools.batch` decision. No per-call goroutines or partial sibling
+   decisions are created.
 5. **No `extraHeaders` option** — matches the TS reference (the Python
    SDK has one; the Go SDK follows TS).
 6. **Lenient `GET /pending/{id}` body validation.** `parsePendingView`

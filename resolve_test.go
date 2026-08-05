@@ -104,6 +104,24 @@ func TestResolveTerminal404(t *testing.T) {
 	}
 }
 
+func TestResolveTreatsEvery4xxAsTerminal(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		http.Error(w, "bad request", http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	err := newTestPending(srv.URL).Resolve(context.Background(), fastResolve())
+	var te *TransportError
+	if !errors.As(err, &te) || te.Status != http.StatusBadRequest {
+		t.Fatalf("want terminal TransportError(400), got %v", err)
+	}
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("terminal response was retried %d times", calls)
+	}
+}
+
 func TestResolveSwallows5xxThenAllow(t *testing.T) {
 	var n int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

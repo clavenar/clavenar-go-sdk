@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const correlationHeader = "X-Clavenar-Correlation-Id"
@@ -21,6 +24,8 @@ const (
 	decisionContract       = "clavenar.decision/v1"
 	decisionContractHeader = "X-Clavenar-Decision-Contract"
 	idempotencyIDHeader    = "X-Clavenar-Idempotency-Id"
+	maxResponseBodyBytes   = 1 << 20
+	maxErrorTextBytes      = 4 << 10
 )
 
 type inspectRequest struct {
@@ -42,6 +47,9 @@ type inspectParams struct {
 // *TransportError is returned once retries are exhausted.
 func Inspect(ctx context.Context, call ToolCall, opts Options) (Verdict, error) {
 	if err := opts.validate(); err != nil {
+		return Verdict{}, err
+	}
+	if err := validateToolCall(call); err != nil {
 		return Verdict{}, err
 	}
 	o := opts.withDefaults()
@@ -71,12 +79,16 @@ func InspectBatch(ctx context.Context, calls []ToolCall, opts Options) (Verdict,
 	if err := opts.validate(); err != nil {
 		return Verdict{}, err
 	}
-	if len(calls) < 1 || len(calls) > 128 {
+	if len(calls) < 1 || len(calls) > maxDecisionBatchCalls {
 		return Verdict{}, &ConfigError{Msg: "clavenar: atomic decision batch must contain 1..128 calls"}
 	}
 	seen := make(map[string]struct{}, len(calls))
 	batchCalls := make([]atomicBatchCall, 0, len(calls))
+	totalArgumentsBytes := 0
 	for _, call := range calls {
+		if err := validateToolCall(call); err != nil {
+			return Verdict{}, err
+		}
 		if call.ID == "" || call.Name == "" {
 			return Verdict{}, &ConfigError{Msg: "clavenar: atomic decision calls require non-empty id and name"}
 		}
@@ -84,6 +96,10 @@ func InspectBatch(ctx context.Context, calls []ToolCall, opts Options) (Verdict,
 			return Verdict{}, &ConfigError{Msg: "clavenar: atomic decision calls require unique ids"}
 		}
 		seen[call.ID] = struct{}{}
+		totalArgumentsBytes += len(call.Input)
+		if totalArgumentsBytes > maxToolBatchBytes {
+			return Verdict{}, &ConfigError{Msg: "clavenar: atomic decision arguments exceed the batch safety limit"}
+		}
 		batchCalls = append(batchCalls, atomicBatchCall{ID: call.ID, Name: call.Name, Arguments: call.Input})
 	}
 	idempotencyID, err := newUUID()
@@ -106,6 +122,22 @@ func InspectBatch(ctx context.Context, calls []ToolCall, opts Options) (Verdict,
 		return Verdict{}, &TransportError{Msg: "clavenar inspect: failed to encode atomic batch: " + err.Error()}
 	}
 	return inspectDecision(ctx, body, idempotencyID, opts.withDefaults())
+}
+
+func validateToolCall(call ToolCall) error {
+	if call.Name == "" {
+		return &ConfigError{Msg: "clavenar: tool call name is required"}
+	}
+	if len(call.ID) > maxToolIdentifierBytes || len(call.Name) > maxToolIdentifierBytes {
+		return &ConfigError{Msg: "clavenar: tool call id or name exceeds the safety limit"}
+	}
+	if len(call.Input) > maxToolArgumentsBytes {
+		return &ConfigError{Msg: "clavenar: tool call arguments exceed the safety limit"}
+	}
+	if !json.Valid(call.Input) {
+		return &ConfigError{Msg: "clavenar: tool call arguments must be valid JSON"}
+	}
+	return nil
 }
 
 type atomicBatchCall struct {
@@ -132,6 +164,9 @@ type atomicBatchRequest struct {
 }
 
 func inspectDecision(ctx context.Context, body []byte, idempotencyID string, o Options) (Verdict, error) {
+	if o.Retry.MaxAttempts < 1 || o.Retry.MaxAttempts > maxRetryAttempts {
+		return Verdict{}, &ConfigError{Msg: fmt.Sprintf("clavenar: effective Retry.MaxAttempts must be between 1 and %d", maxRetryAttempts)}
+	}
 	var lastErr error
 	for attempt := 0; attempt < o.Retry.MaxAttempts; attempt++ {
 		v, err := inspectOnce(ctx, body, idempotencyID, o)
@@ -180,11 +215,17 @@ func inspectOnce(ctx context.Context, body []byte, idempotencyID string, o Optio
 		return Verdict{}, &TransportError{Msg: "clavenar inspect failed: " + err.Error()}
 	}
 	defer resp.Body.Close()
+	if contract := resp.Header.Get(decisionContractHeader); contract != "" && contract != decisionContract {
+		return Verdict{}, &TransportError{
+			Msg:    "clavenar inspect: response selected an unexpected decision contract",
+			Status: resp.StatusCode,
+		}
+	}
 
 	corr := resp.Header.Get(correlationHeader)
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return Verdict{Kind: VerdictAllow, CorrelationID: corr}, nil
+		return parseAllow(resp, corr)
 	case http.StatusForbidden:
 		return parseDeny(resp, corr)
 	case http.StatusAccepted:
@@ -192,13 +233,38 @@ func inspectOnce(ctx context.Context, body []byte, idempotencyID string, o Optio
 	case http.StatusTooManyRequests:
 		return parseRateLimit(resp, corr)
 	default:
-		text := safeReadText(resp)
+		text, readErr := safeReadText(resp)
+		if readErr != nil {
+			return Verdict{}, &TransportError{Msg: "clavenar inspect: failed to read bounded error response: " + readErr.Error(), Status: resp.StatusCode}
+		}
 		msg := fmt.Sprintf("clavenar inspect: unexpected status %d", resp.StatusCode)
 		if text != "" {
 			msg += ": " + text
 		}
 		return Verdict{}, &TransportError{Msg: msg, Status: resp.StatusCode}
 	}
+}
+
+func parseAllow(resp *http.Response, corr string) (Verdict, error) {
+	data, err := readBoundedBody(resp.Body)
+	if err != nil {
+		return Verdict{}, &TransportError{Msg: "clavenar 200 with invalid body: " + err.Error(), Status: http.StatusOK}
+	}
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return Verdict{Kind: VerdictAllow, CorrelationID: corr}, nil
+	}
+	var envelope struct {
+		Verdict       string `json:"verdict"`
+		CorrelationID string `json:"correlation_id"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Verdict != "allow" {
+		return Verdict{}, &TransportError{Msg: "clavenar 200 with unexpected allow body", Status: http.StatusOK}
+	}
+	if corr == "" {
+		corr = envelope.CorrelationID
+	}
+	return Verdict{Kind: VerdictAllow, CorrelationID: corr}, nil
 }
 
 func newUUID() (string, error) {
@@ -270,7 +336,10 @@ func PollPendingOnce(ctx context.Context, correlationID string, opts Options) (P
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		text := safeReadText(resp)
+		text, readErr := safeReadText(resp)
+		if readErr != nil {
+			return PendingView{}, &TransportError{Msg: "clavenar poll: failed to read bounded error response: " + readErr.Error(), Status: resp.StatusCode}
+		}
 		msg := fmt.Sprintf("clavenar poll: unexpected status %d", resp.StatusCode)
 		if text != "" {
 			msg += ": " + text
@@ -385,7 +454,7 @@ func parseRateLimit(resp *http.Response, corr string) (Verdict, error) {
 	if layer, ok := m["layer"].(string); ok {
 		v.Layer = layer
 	}
-	if secs, ok := m["retry_after_secs"].(float64); ok {
+	if secs, ok := m["retry_after_secs"].(float64); ok && secs >= 0 && secs <= math.MaxInt32 && secs == math.Trunc(secs) {
 		s := int(secs)
 		v.RetryAfterSecs = &s
 	}
@@ -393,7 +462,7 @@ func parseRateLimit(resp *http.Response, corr string) (Verdict, error) {
 }
 
 func parsePendingView(resp *http.Response) (PendingView, error) {
-	data, err := io.ReadAll(resp.Body)
+	data, err := readBoundedBody(resp.Body)
 	if err != nil {
 		return PendingView{}, &TransportError{Msg: "clavenar poll with unparseable body: " + err.Error(), Status: http.StatusOK}
 	}
@@ -408,7 +477,7 @@ func parsePendingView(resp *http.Response) (PendingView, error) {
 }
 
 func decodeObject(resp *http.Response) (map[string]any, error) {
-	data, err := io.ReadAll(resp.Body)
+	data, err := readBoundedBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -436,7 +505,17 @@ func isRetriable(te *TransportError) bool {
 func backoff(base time.Duration, attempt int) time.Duration {
 	// Full jitter: random in [ceiling/2, ceiling] where ceiling =
 	// base*2^attempt. Avoids synchronized-retry thundering herds.
-	ceiling := base << attempt
+	ceiling := base
+	for index := 0; index < attempt && ceiling < maxRetryDelay; index++ {
+		if ceiling > maxRetryDelay/2 {
+			ceiling = maxRetryDelay
+			break
+		}
+		ceiling *= 2
+	}
+	if ceiling > maxRetryDelay {
+		ceiling = maxRetryDelay
+	}
 	return time.Duration(float64(ceiling) * (0.5 + rand.Float64()*0.5))
 }
 
@@ -458,12 +537,42 @@ func joinURL(base, path string) string {
 	return strings.TrimSuffix(base, "/") + "/" + strings.TrimPrefix(path, "/")
 }
 
-func safeReadText(resp *http.Response) string {
-	data, err := io.ReadAll(resp.Body)
+func readBoundedBody(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxResponseBodyBytes+1))
 	if err != nil {
-		return ""
+		return nil, err
 	}
-	return strings.TrimSpace(string(data))
+	if len(data) > maxResponseBodyBytes {
+		return nil, fmt.Errorf("response body exceeds %d bytes", maxResponseBodyBytes)
+	}
+	return data, nil
+}
+
+func safeReadText(resp *http.Response) (string, error) {
+	data, err := readBoundedBody(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return boundedErrorText(data), nil
+}
+
+func boundedErrorText(data []byte) string {
+	text := strings.ToValidUTF8(string(data), "\uFFFD")
+	text = strings.Map(func(char rune) rune {
+		if unicode.IsControl(char) || unicode.In(char, unicode.Cf) {
+			return ' '
+		}
+		return char
+	}, text)
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) <= maxErrorTextBytes {
+		return text
+	}
+	text = text[:maxErrorTextBytes]
+	for !utf8.ValidString(text) {
+		text = text[:len(text)-1]
+	}
+	return text + "..."
 }
 
 func stringSlice(v any) []string {

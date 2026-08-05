@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -146,5 +147,26 @@ func TestStreamGateObserve(t *testing.T) {
 	}
 	if len(kinds) != 1 || kinds[0] != VerdictDeny {
 		t.Fatalf("kinds = %v", kinds)
+	}
+}
+
+func TestStreamGateRejectsDuplicateStart(t *testing.T) {
+	g := NewStreamGate(mustOpts("http://127.0.0.1:9"))
+	g.Start("0", "first", "tool")
+	g.Update("0", "", "", `{}`)
+	g.Start("0", "second", "other")
+	var ce *ConfigError
+	if err := g.Close(context.Background(), "0"); !errors.As(err, &ce) {
+		t.Fatalf("want duplicate-start ConfigError, got %v", err)
+	}
+}
+
+func TestStreamGateBoundsArguments(t *testing.T) {
+	g := NewStreamGate(mustOpts("http://127.0.0.1:9"))
+	g.Start("0", "first", "tool")
+	g.Update("0", "", "", strings.Repeat("x", maxToolArgumentsBytes+1))
+	var ce *ConfigError
+	if err := g.Close(context.Background(), "0"); !errors.As(err, &ce) {
+		t.Fatalf("want argument-limit ConfigError, got %v", err)
 	}
 }

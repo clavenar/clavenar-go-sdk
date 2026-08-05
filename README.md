@@ -37,16 +37,20 @@ Build `clavenar.ToolCall` values from whatever your framework hands you,
 and inspect before dispatch:
 
 ```go
-opts := clavenar.New("http://localhost:8088", clavenar.WithToken(token))
+opts := clavenar.New("https://clavenar.internal", clavenar.WithToken(token))
 
 calls := []clavenar.ToolCall{
     {ID: "call_1", Name: "delete_user", Input: json.RawMessage(`{"user":"alice"}`)},
 }
 err := clavenar.InspectAll(ctx, calls, opts)
 
-var denied *clavenar.Denied
-if errors.As(err, &denied) {
-    log.Printf("blocked %s: %v", denied.ToolName, denied.Reasons)
+if err != nil {
+    var denied *clavenar.Denied
+    if errors.As(err, &denied) {
+        log.Printf("blocked %s: %v", denied.ToolName, denied.Reasons)
+    } else {
+        log.Printf("policy decision failed closed: %v", err)
+    }
     return
 }
 // err == nil -> every call cleared; dispatch them.
@@ -147,14 +151,31 @@ opts := clavenar.New(endpoint,
 
 ```go
 var pending *clavenar.Pending
-if errors.As(err, &pending) {
-    if err := pending.Resolve(ctx, nil); err != nil {
+if err != nil {
+    if !errors.As(err, &pending) {
+        return // deny, rate limit, transport failure, or invalid configuration
+    }
+    if resolveErr := pending.Resolve(ctx, nil); resolveErr != nil {
         // *clavenar.Denied (operator denied) or *clavenar.TransportError (timed out)
         return
     }
     // approved — re-dispatch the tool call
 }
 ```
+
+Plaintext credentials are rejected. Local test gateways must opt in with
+`WithInsecureLoopback()` and use a literal loopback IP address; the option
+never permits a hostname or non-loopback HTTP host.
+
+## Governed execution
+
+`ExecutePreparedTool` requires a recoverable durable store and an
+`AuthorizationVerify` callback that validates Identity's signature using a
+trusted key set. The SDK validates the signed payload digest and protected
+request bindings before invoking the callback. If a prior intent has no
+completion, the SDK calls the optional provider `Recoverer`; without conclusive
+reconciliation it returns `*clavenar.RecoveryRequired` and never repeats the
+effect. Executors must also forward the stable `IdempotencyID` to providers.
 
 ## Streaming
 

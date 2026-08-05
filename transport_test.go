@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -280,7 +281,7 @@ func TestInspectRequestEnvelope(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := Inspect(context.Background(), sampleCall(), mustOpts(srv.URL, WithToken("tok")))
+	_, err := Inspect(context.Background(), sampleCall(), mustOpts(srv.URL, WithToken("tok"), WithInsecureLoopback()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -350,9 +351,138 @@ func TestInspectMaxAttemptsBelowOne(t *testing.T) {
 		Endpoint: "http://127.0.0.1:9",
 		Retry:    Retry{MaxAttempts: -1},
 	})
+	var ce *ConfigError
+	if !errors.As(err, &ce) || !strings.Contains(ce.Msg, "MaxAttempts") {
+		t.Fatalf("want MaxAttempts ConfigError, got %v", err)
+	}
+}
+
+func TestInspectBatchRejectsNegativeAttemptsBeforeNetwork(t *testing.T) {
+	var called int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&called, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	_, err := InspectBatch(context.Background(), []ToolCall{
+		{ID: "one", Name: "first", Input: json.RawMessage(`{}`)},
+		{ID: "two", Name: "second", Input: json.RawMessage(`{}`)},
+	}, Options{Endpoint: srv.URL, Retry: Retry{MaxAttempts: -1}})
+	var ce *ConfigError
+	if !errors.As(err, &ce) {
+		t.Fatalf("want ConfigError, got %v", err)
+	}
+	if atomic.LoadInt32(&called) != 0 {
+		t.Fatal("invalid retry policy reached the network")
+	}
+}
+
+func TestInspectRejectsUnexpectedAllowBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<html>proxy page</html>"))
+	}))
+	defer srv.Close()
+
+	_, err := Inspect(context.Background(), sampleCall(), mustOpts(srv.URL))
 	var te *TransportError
-	if !errors.As(err, &te) || !strings.Contains(te.Msg, "MaxAttempts") {
-		t.Fatalf("want MaxAttempts TransportError, got %v", err)
+	if !errors.As(err, &te) || te.Status != http.StatusOK {
+		t.Fatalf("want TransportError(200), got %v", err)
+	}
+}
+
+func TestInspectRejectsOversizedVerdictBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(strings.Repeat("x", maxResponseBodyBytes+1)))
+	}))
+	defer srv.Close()
+
+	_, err := Inspect(context.Background(), sampleCall(), mustOpts(srv.URL))
+	var te *TransportError
+	if !errors.As(err, &te) || !strings.Contains(te.Msg, "exceeds") {
+		t.Fatalf("want bounded-body TransportError, got %v", err)
+	}
+}
+
+func TestInspectRejectsUnsafeToolCallsBeforeNetwork(t *testing.T) {
+	var called int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&called, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	tests := []ToolCall{
+		{ID: "one", Name: "", Input: json.RawMessage(`{}`)},
+		{ID: "one", Name: strings.Repeat("n", maxToolIdentifierBytes+1), Input: json.RawMessage(`{}`)},
+		{ID: "one", Name: "tool", Input: json.RawMessage(`not-json`)},
+		{ID: "one", Name: "tool", Input: json.RawMessage(strings.Repeat("x", maxToolArgumentsBytes+1))},
+	}
+	for _, call := range tests {
+		if _, err := Inspect(context.Background(), call, mustOpts(srv.URL)); err == nil {
+			t.Fatalf("Inspect(%q) unexpectedly accepted an unsafe call", call.Name)
+		}
+	}
+	if atomic.LoadInt32(&called) != 0 {
+		t.Fatal("an unsafe tool call reached the network")
+	}
+}
+
+func TestInspectBatchRejectsOversizedAggregateBeforeNetwork(t *testing.T) {
+	var called int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&called, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	input := json.RawMessage(`"` + strings.Repeat("x", maxToolArgumentsBytes-2) + `"`)
+	calls := make([]ToolCall, 5)
+	for index := range calls {
+		calls[index] = ToolCall{ID: fmt.Sprintf("call-%d", index), Name: "tool", Input: input}
+	}
+	if _, err := InspectBatch(context.Background(), calls, mustOpts(srv.URL)); err == nil {
+		t.Fatal("InspectBatch unexpectedly accepted oversized aggregate arguments")
+	}
+	if atomic.LoadInt32(&called) != 0 {
+		t.Fatal("an oversized tool-call batch reached the network")
+	}
+}
+
+func TestUnexpectedStatusTextIsBoundedAndControlSafe(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+		_, _ = w.Write([]byte("first\n\x1b[31msecond " + strings.Repeat("x", maxErrorTextBytes+1)))
+	}))
+	defer srv.Close()
+
+	_, err := Inspect(context.Background(), sampleCall(), mustOpts(srv.URL))
+	var transportErr *TransportError
+	if !errors.As(err, &transportErr) {
+		t.Fatalf("want TransportError, got %v", err)
+	}
+	if strings.ContainsAny(transportErr.Msg, "\n\r\x1b") || len(transportErr.Msg) > maxErrorTextBytes+128 {
+		t.Fatalf("error text was not safely bounded: %q", transportErr.Msg)
+	}
+}
+
+func TestTokenRequiresSecureTransportOrExplicitLoopback(t *testing.T) {
+	_, err := Inspect(context.Background(), sampleCall(), mustOpts("http://example.com", WithToken("secret")))
+	var ce *ConfigError
+	if !errors.As(err, &ce) || !strings.Contains(ce.Msg, "require https") {
+		t.Fatalf("want credential transport ConfigError, got %v", err)
+	}
+
+	_, err = Inspect(context.Background(), sampleCall(), mustOpts("http://example.com", WithToken("secret"), WithInsecureLoopback()))
+	if !errors.As(err, &ce) || !strings.Contains(ce.Msg, "require https") {
+		t.Fatalf("non-loopback plaintext must remain rejected, got %v", err)
+	}
+
+	_, err = Inspect(context.Background(), sampleCall(), mustOpts("http://localhost:8088", WithToken("secret"), WithInsecureLoopback()))
+	if !errors.As(err, &ce) || !strings.Contains(ce.Msg, "require https") {
+		t.Fatalf("hostname-based plaintext must remain rejected, got %v", err)
 	}
 }
 

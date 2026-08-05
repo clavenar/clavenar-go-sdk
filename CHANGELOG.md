@@ -6,6 +6,28 @@ adheres to [Semantic Import Versioning](https://go.dev/ref/mod#versions).
 
 ## [Unreleased]
 
+### Security
+
+- Validate decision endpoints and retry bounds, require an explicit
+  `WithInsecureLoopback` opt-in before sending credentials over loopback HTTP,
+  and cap every request, response body, retry delay, streaming accumulator,
+  error preview, and batch.
+- Governed execution now verifies authorization bindings, evidence digests,
+  credential fingerprints, and canonical payload hashes before an effect can
+  run. Durable intent recovery prevents replay after an ambiguous crash, and
+  receipt finalization uses a bounded context independent of caller
+  cancellation.
+
+### Changed
+
+- `DurableExecutionStore` loads existing execution state; callers must provide
+  an `AuthorizationVerifier`, and ambiguous persisted intents return typed
+  `RecoveryRequired` unless an `EffectRecoverer` reconciles the provider result.
+- `Pending.Resolve` stops on protocol and other terminal 4xx responses while
+  retaining bounded retries for network failures and 5xx responses.
+- Successful decision responses are contract-checked instead of treating an
+  arbitrary HTTP 200 body as authorization.
+
 ## [1.4.0] - 2026-07-26
 
 ### Added

@@ -2,6 +2,7 @@ package clavenar
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -46,6 +47,10 @@ type Options struct {
 	Timeout    time.Duration
 	Retry      Retry
 	HTTPClient HTTPDoer
+	// AllowInsecureTransport permits credentials to be sent over plaintext
+	// HTTP. It exists only for explicit localhost development and test setups;
+	// production callers should leave it false.
+	AllowInsecureTransport bool
 	// SecureTransport reloads CA, client identity and token before each
 	// request. It cannot be combined with Token or HTTPClient.
 	SecureTransport *SecureTransportProfile
@@ -68,6 +73,9 @@ const (
 	defaultTimeout     = 10 * time.Second
 	defaultMaxAttempts = 3
 	defaultBaseDelay   = 100 * time.Millisecond
+	maxRetryAttempts   = 10
+	maxRetryBaseDelay  = time.Minute
+	maxRetryDelay      = time.Minute
 )
 
 func (o Options) withDefaults() Options {
@@ -95,10 +103,22 @@ func (o Options) validate() error {
 	}
 	u, err := url.Parse(o.Endpoint)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		return &ConfigError{Msg: "clavenar: Options.Endpoint is not a valid absolute URL: " + o.Endpoint}
+		return &ConfigError{Msg: "clavenar: Options.Endpoint is not a valid absolute URL"}
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return &ConfigError{Msg: "clavenar: Options.Endpoint must use http or https"}
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return &ConfigError{Msg: "clavenar: Options.Endpoint must not contain user info, a query, or a fragment"}
 	}
 	if o.Timeout < 0 {
 		return &ConfigError{Msg: "clavenar: Options.Timeout must not be negative"}
+	}
+	if o.Retry.MaxAttempts < 0 || o.Retry.MaxAttempts > maxRetryAttempts {
+		return &ConfigError{Msg: "clavenar: Retry.MaxAttempts must be between 0 (default) and 10"}
+	}
+	if o.Retry.BaseDelay < 0 || o.Retry.BaseDelay > maxRetryBaseDelay {
+		return &ConfigError{Msg: "clavenar: Retry.BaseDelay must be between 0 (default) and 1m"}
 	}
 	if o.Mode != ModeEnforce && o.Mode != ModeObserve {
 		return &ConfigError{Msg: "clavenar: Options.Mode must be ModeEnforce or ModeObserve"}
@@ -106,7 +126,17 @@ func (o Options) validate() error {
 	if o.SecureTransport != nil && (o.HTTPClient != nil || o.Token != "") {
 		return &ConfigError{Msg: "clavenar: SecureTransport cannot be combined with Token or HTTPClient"}
 	}
+	if u.Scheme == "http" && (o.Token != "" || o.SecureTransport != nil) {
+		if !o.AllowInsecureTransport || !isLoopbackHost(u.Hostname()) {
+			return &ConfigError{Msg: "clavenar: credentials require https; plaintext is available only for explicitly enabled loopback development"}
+		}
+	}
 	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (o Options) requestTransport(ctx context.Context) (HTTPDoer, string, func(), error) {
@@ -149,6 +179,11 @@ func WithRetry(r Retry) Option { return func(o *Options) { o.Retry = r } }
 
 // WithHTTPClient injects an HTTP client (tests, custom transports).
 func WithHTTPClient(c HTTPDoer) Option { return func(o *Options) { o.HTTPClient = c } }
+
+// WithInsecureLoopback permits bearer-token or secure-profile requests to a
+// plaintext loopback-IP endpoint. It is intended only for local development
+// and tests; hostnames and non-loopback HTTP endpoints remain rejected.
+func WithInsecureLoopback() Option { return func(o *Options) { o.AllowInsecureTransport = true } }
 
 // WithSecureTransport installs one reusable reload-before-request profile.
 func WithSecureTransport(profile *SecureTransportProfile) Option {

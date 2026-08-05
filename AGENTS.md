@@ -2,8 +2,8 @@
 # clavenar-go-sdk — agent-side wrapper SDK: explicit `Inspect`/`InspectAll` + opt-in provider adapters
 
 Inspects the tool calls a model emits against your Clavenar policies
-*before* your agent runs them. Zero-dep core (stdlib + `golang.org/x/sync`
-only); provider SDKs live behind opt-in `adapters/*` sub-modules. Matches
+*before* your agent runs them. Zero-dep core (standard library only);
+provider SDKs live behind opt-in `adapters/*` sub-modules. Matches
 the TypeScript / Python agent-SDKs 1:1 on the wire.
 
 ## Build, test, lint
@@ -37,11 +37,12 @@ Run: library, no binary. The SDK is an HTTP client of a Clavenar gateway
 
 Import path ends `clavenar-go-sdk`; package name is `clavenar`.
 
-- `inspect.go` — `InspectAll` (batch, concurrent via `errgroup`).
+- `inspect.go` — `InspectAll` (one ordered atomic sibling batch).
 - `transport.go` — `Inspect` (single), JSON-RPC envelope, `POST /mcp`, status→verdict mapping, jittered retry.
 - `toolcall.go` — `ToolCall` normalization (the provider-agnostic unit of inspection).
-- `options.go` — `Options`, `New(endpoint, ...Option)`, `WithToken` / `WithObserve` / `WithOnVerdict` / `WithOnPolicyError` / `WithRetry` / `WithTimeout`.
-- `errors.go` — typed errors `*Denied` / `*Pending` / `*TransportError` / `*ConfigError`; `Pending.Resolve` polls `/pending/{id}`.
+- `options.go` — endpoint/retry validation plus `Options`, `New`, transport, credential, callback, and retry options; plaintext credential transport requires explicit literal-loopback-IP opt-in.
+- `errors.go` — typed errors `*Denied` / `*Pending` / `*TransportError` / `*ConfigError` / `*RecoveryRequired`; `Pending.Resolve` polls `/pending/{id}` and stops on terminal protocol/4xx responses.
+- `governed_execution.go` — authorization/evidence verification, durable intent/completion state, provider-effect recovery, single execution, and cancellation-independent bounded finalization.
 - `streamgate.go` — `StreamGate`: holds a tool-call's closing event until the verdict returns.
 - `realtime.go` — `InspectRealtimeFunctionCall` one-shot helper for OpenAI Realtime WS events.
 - `devmode.go` — `RenderDenyPanel` / stderr deny panel (gated on `DevMode`).
@@ -55,9 +56,9 @@ Import path ends `clavenar-go-sdk`; package name is `clavenar`.
 
 - After adding or updating a feature, also update the relevant `MANUAL_TESTS*` file(s) when needed.
 - **Inspect before dispatch — always.** The SDK exists so no model-emitted tool call runs un-inspected. Build `ToolCall` values and clear them through `Inspect`/`InspectAll` (or an adapter) ahead of execution; never run a call you haven't gated.
-- **Zero-dep core.** The root module depends only on the stdlib + `golang.org/x/sync`. Provider SDKs belong in `adapters/*` only — never add an `anthropic`/`openai` import to the core module.
+- **Zero-dep core.** The root module depends only on the standard library. Provider SDKs belong in `adapters/*` only — never add an `anthropic`/`openai` import to the core module.
 - **Fail closed.** In enforce mode an unreachable gateway returns `*TransportError`, never a silent allow. Observe mode never blocks: per-call transport errors fire `OnPolicyError` and the call passes.
-- **Submission-order semantics.** `InspectAll` fans out concurrently but returns the first deny/pending in `calls[]` order, not wire order. `OnVerdict` fires per call before any deny→error translation.
+- **Submission-order semantics.** `InspectAll` submits one ordered atomic sibling batch and maps a blocking batch verdict to the first call in `calls[]`. `OnVerdict` fires per covered call before any deny→error translation.
 - **Explicit over magic.** Go has no transparent client proxy (unlike TS/Python). Wrap the dispatcher or wrap the model client via an adapter.
 - **DevMode is an attacker oracle.** Detailed per-detector denials (`DevMode: true`, gateway `CLAVENAR_PROXY_VERBOSE_VERDICTS=true`) leak which detector fired — dev/staging only, never enforce-prod.
 - **Streaming gate.** Adapters hold the closing event (Anthropic `content_block_stop`, OpenAI `finish_reason:"tool_calls"`) until the verdict lands, so a denied call never reaches your loop as actionable.
