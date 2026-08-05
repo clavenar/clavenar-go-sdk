@@ -29,6 +29,8 @@ adheres to [Semantic Import Versioning](https://go.dev/ref/mod#versions).
   retaining bounded retries for network failures and 5xx responses.
 - Successful decision responses are contract-checked instead of treating an
   arbitrary HTTP 200 body as authorization.
+- Decision clients validate Lite's exact side-effect-free
+  `clavenar.decision/v1` allow envelope and its correlation binding.
 
 ## [1.4.0] - 2026-07-26
 

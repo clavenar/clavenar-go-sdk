@@ -46,6 +46,37 @@ func TestInspectAllow(t *testing.T) {
 	}
 }
 
+func TestInspectExactDecisionAllowEnvelope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"contract":"clavenar.decision/v1","decision":"allow","correlation_id":"decision-correlation","executable":false}`))
+	}))
+	defer srv.Close()
+
+	v, err := Inspect(context.Background(), sampleCall(), mustOpts(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v.Kind != VerdictAllow || v.CorrelationID != "decision-correlation" {
+		t.Fatalf("got %+v", v)
+	}
+}
+
+func TestInspectDecisionAllowCorrelationMismatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Clavenar-Correlation-Id", "header-correlation")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"contract":"clavenar.decision/v1","decision":"allow","correlation_id":"body-correlation","executable":false}`))
+	}))
+	defer srv.Close()
+
+	_, err := Inspect(context.Background(), sampleCall(), mustOpts(srv.URL))
+	var transportError *TransportError
+	if !errors.As(err, &transportError) || !strings.Contains(transportError.Msg, "correlation id header/body mismatch") {
+		t.Fatalf("want correlation mismatch TransportError, got %v", err)
+	}
+}
+
 func TestInspectDeny(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("X-Clavenar-Correlation-Id", "c1")

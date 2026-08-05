@@ -254,12 +254,37 @@ func parseAllow(resp *http.Response, corr string) (Verdict, error) {
 	if len(data) == 0 {
 		return Verdict{Kind: VerdictAllow, CorrelationID: corr}, nil
 	}
-	var envelope struct {
-		Verdict       string `json:"verdict"`
-		CorrelationID string `json:"correlation_id"`
-	}
-	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Verdict != "allow" {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
 		return Verdict{}, &TransportError{Msg: "clavenar 200 with unexpected allow body", Status: http.StatusOK}
+	}
+	if verdict, ok := fields["verdict"]; ok && len(fields) == 1 {
+		var value string
+		if err := json.Unmarshal(verdict, &value); err == nil && value == "allow" {
+			return Verdict{Kind: VerdictAllow, CorrelationID: corr}, nil
+		}
+	}
+	for _, key := range []string{"contract", "decision", "correlation_id", "executable"} {
+		if _, ok := fields[key]; !ok || len(fields) != 4 {
+			return Verdict{}, &TransportError{Msg: "clavenar 200 with unexpected allow body", Status: http.StatusOK}
+		}
+	}
+	var envelope struct {
+		Contract      string `json:"contract"`
+		Decision      string `json:"decision"`
+		CorrelationID string `json:"correlation_id"`
+		Executable    *bool  `json:"executable"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil ||
+		envelope.Contract != decisionContract ||
+		envelope.Decision != "allow" ||
+		envelope.CorrelationID == "" ||
+		envelope.Executable == nil ||
+		*envelope.Executable {
+		return Verdict{}, &TransportError{Msg: "clavenar 200 with unexpected allow body", Status: http.StatusOK}
+	}
+	if corr != "" && corr != envelope.CorrelationID {
+		return Verdict{}, &TransportError{Msg: "clavenar 200 correlation id header/body mismatch", Status: http.StatusOK}
 	}
 	if corr == "" {
 		corr = envelope.CorrelationID
