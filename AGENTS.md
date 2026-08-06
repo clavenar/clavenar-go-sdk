@@ -43,6 +43,9 @@ Import path ends `clavenar-go-sdk`; package name is `clavenar`.
 - `options.go` — endpoint/retry validation plus `Options`, `New`, transport, credential, callback, and retry options; plaintext credential transport requires explicit literal-loopback-IP opt-in.
 - `errors.go` — typed errors `*Denied` / `*Pending` / `*TransportError` / `*ConfigError` / `*RecoveryRequired`; `Pending.Resolve` polls `/pending/{id}` and stops on terminal protocol/4xx responses.
 - `governed_execution.go` — authorization/evidence verification, durable intent/completion state, provider-effect recovery, single execution, and cancellation-independent bounded finalization.
+- `secure_transport.go` — `SecureTransportProfile` reloads a complete CA,
+  client identity, token, timeout, and proxy snapshot before each request; one
+  request never mixes generations.
 - `streamgate.go` — `StreamGate`: holds a tool-call's closing event until the verdict returns.
 - `realtime.go` — `InspectRealtimeFunctionCall` one-shot helper for OpenAI Realtime WS events.
 - `devmode.go` — `RenderDenyPanel` / stderr deny panel (gated on `DevMode`).
@@ -54,7 +57,6 @@ Import path ends `clavenar-go-sdk`; package name is `clavenar`.
 
 ## Conventions & invariants
 
-- After adding or updating a feature, also update the relevant `MANUAL_TESTS*` file(s) when needed.
 - **Inspect before dispatch — always.** The SDK exists so no model-emitted tool call runs un-inspected. Build `ToolCall` values and clear them through `Inspect`/`InspectAll` (or an adapter) ahead of execution; never run a call you haven't gated.
 - **Zero-dep core.** The root module depends only on the standard library. Provider SDKs belong in `adapters/*` only — never add an `anthropic`/`openai` import to the core module.
 - **Fail closed.** In enforce mode an unreachable gateway returns `*TransportError`, never a silent allow. Observe mode never blocks: per-call transport errors fire `OnPolicyError` and the call passes.
@@ -62,6 +64,10 @@ Import path ends `clavenar-go-sdk`; package name is `clavenar`.
 - **Explicit over magic.** Go has no transparent client proxy (unlike TS/Python). Wrap the dispatcher or wrap the model client via an adapter.
 - **DevMode is an attacker oracle.** Detailed per-detector denials (`DevMode: true`, gateway `CLAVENAR_PROXY_VERBOSE_VERDICTS=true`) leak which detector fired — dev/staging only, never enforce-prod.
 - **Streaming gate.** Adapters hold the closing event (Anthropic `content_block_stop`, OpenAI `finish_reason:"tool_calls"`) until the verdict lands, so a denied call never reaches your loop as actionable.
+- **Decision and effect retries are separate.** Explicit side-effect-free
+  `clavenar.decision/v1` calls may retry with one stable decision identity.
+  Governed effects use durable idempotency/recovery; uncertainty returns
+  `*RecoveryRequired` and never blindly invokes the provider again.
 
 Go standards that bind here:
 - `gofmt -l .` must be empty and `go vet ./...` clean before pushing.
